@@ -4,7 +4,9 @@ on:
   push:
     tags:
       - 'v*'
-
+  # 添加手动触发选项，用于测试
+  workflow_dispatch:
+  
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
