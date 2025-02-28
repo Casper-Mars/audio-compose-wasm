@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-  # 添加手动触发选项，用于测试
   workflow_dispatch:
   
 jobs:
@@ -31,13 +30,13 @@ jobs:
           cd pkg
           zip -r ../wasm-pkg.zip *
           cd ..
-          
-          - name: Create Release
-            id: create_release
-            uses: softprops/action-gh-release@v1
-            with:
-              files: wasm-pkg.zip
-              draft: false
-              prerelease: false
-            env:
-              GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: wasm-pkg.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
