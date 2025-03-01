@@ -113,6 +113,44 @@ wasm-pack build --target web
 ]
 ```
 
+#### 进度回调函数
+
+可以通过在全局定义 `progress_callback` 函数来监听处理进度：
+
+```javascript
+window.progress_callback = function(percent, stage) {
+    // percent: 处理进度（0-100）
+    // stage: 当前阶段（'downloading' | 'encoding' | 'complete'）
+    console.log(`Progress: ${percent}%, Stage: ${stage}`);
+};
+```
+
+##### 回调函数参数说明：
+
+- percent ：数值类型，表示当前进度（0-100）
+- stage ：字符串类型，表示当前处理阶段
+- 'downloading' ：正在下载音频文件
+- 'encoding' ：正在编码合并后的音频
+- 'complete' ：处理完成
+
+##### 使用示例：
+
+```javascript
+window.progress_callback = function(percent, stage) {
+    switch(stage) {
+        case 'downloading':
+            console.log(`下载进度：${percent}%`);
+            break;
+        case 'encoding':
+            console.log('正在编码音频...');
+            break;
+        case 'complete':
+            console.log('处理完成！');
+            break;
+    }
+};
+```
+
 ## 示例代码
 
 详细的使用示例请参考项目中的`index.html`文件。
