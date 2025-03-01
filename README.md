@@ -10,27 +10,37 @@
 - 通过WebAssembly在浏览器中高效运行
 - 简单的JavaScript API接口
 
-## 编译指南
+## 安装指南
 
-### 前置要求
+### 方式一：直接使用预编译包
+
+1. 从 [Releases](https://github.com/Casper-Mars/audio-compose-wasm/releases) 页面下载最新的发布包
+2. 解压下载的文件，将得到以下文件：
+   - `wasm_bg.wasm`：WebAssembly 二进制文件
+   - `wasm.js`：JavaScript 包装器
+   - `wasm.d.ts`：TypeScript 类型定义（可选）
+
+### 方式二：从源码编译
+
+#### 前置要求
 
 - Rust和Cargo (推荐使用rustup安装)
 - wasm-pack (用于编译Rust到WebAssembly)
 
-### 安装wasm-pack
+#### 安装wasm-pack
 
 ```bash
 cargo install wasm-pack
 ```
 
-### 编译项目
+#### 编译项目
 
 ```bash
 # 在项目根目录下运行
 wasm-pack build --target web
 ```
 
-编译完成后，生成的WebAssembly文件将位于`pkg`目录中。
+编译完成后，生成的WebAssembly文件将位于 pkg 目录中。
 
 ## 使用方法
 
