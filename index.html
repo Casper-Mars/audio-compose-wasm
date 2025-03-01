@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <title>WASM音频合成示例</title>
@@ -10,20 +11,24 @@
             margin: 0 auto;
             padding: 20px;
         }
+
         .container {
             display: flex;
             flex-direction: column;
             gap: 20px;
         }
+
         .status {
             padding: 10px;
             border-radius: 4px;
             background-color: #f0f0f0;
         }
+
         audio {
             width: 100%;
             margin: 10px 0;
         }
+
         .download-link {
             display: inline-block;
             padding: 10px 20px;
@@ -32,26 +37,28 @@
             text-decoration: none;
             border-radius: 4px;
         }
+
         .download-link:hover {
             background-color: #45a049;
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>WASM音频合成示例</h1>
         <div id="status" class="status">初始化中...</div>
     </div>
-    
+
     <script type="module">
         import init, { synthesize_audio } from './pkg/wasm.js';
-        
+
         async function run() {
             await init();
-            
+
             const status = document.getElementById('status');
             status.textContent = 'WASM模块已加载';
-            
+
             // 音频片段数据
             const audioSegments = [
                 {
@@ -79,14 +86,17 @@
                     "end_time": "00:00:15,903"
                 }
             ];
-            
+
             try {
                 status.textContent = '开始合成音频...';
-                
+                window.progress_callback = function (percent, stage) {
+                    console.log(`Progress: ${percent}% (${stage})`);
+                    // 这里可以更新UI显示进度
+                };
                 // 调用WASM函数合成音频
                 const base64Audio = await synthesize_audio(JSON.stringify(audioSegments));
                 status.textContent = '音频合成完成！';
-                
+
                 // 将Base64音频数据转换为Blob
                 const byteCharacters = atob(base64Audio);
                 const byteNumbers = new Array(byteCharacters.length);
@@ -95,13 +105,13 @@
                 }
                 const byteArray = new Uint8Array(byteNumbers);
                 const audioBlob = new Blob([byteArray], { type: 'audio/mp3' });
-                
+
                 // 创建音频URL并播放
                 const audioUrl = URL.createObjectURL(audioBlob);
                 const audioElement = new Audio(audioUrl);
                 audioElement.controls = true;
                 document.querySelector('.container').appendChild(audioElement);
-                
+
                 // 提供下载链接
                 const downloadLink = document.createElement('a');
                 downloadLink.href = audioUrl;
@@ -109,15 +119,16 @@
                 downloadLink.textContent = '下载合成的音频';
                 downloadLink.className = 'download-link';
                 document.querySelector('.container').appendChild(downloadLink);
-                
+
             } catch (error) {
                 status.textContent = `音频合成失败: ${error}`;
                 console.error('音频合成失败:', error);
             }
         }
-        
+
         // 页面加载完成后运行示例
         window.addEventListener('DOMContentLoaded', run);
     </script>
 </body>
+
 </html>
