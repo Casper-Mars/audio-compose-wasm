@@ -3,6 +3,9 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>WASM音频合成示例</title>
     <style>
         body {
@@ -51,60 +54,65 @@
     </div>
 
     <script type="module">
-        import init, { synthesize_audio } from './pkg/wasm.js';
+        import init, { AudioSynthesizer } from './pkg/wasm.js';
 
         async function run() {
-            await init();
-
             const status = document.getElementById('status');
-            status.textContent = 'WASM模块已加载';
-
-            // 音频片段数据
-            const audioSegments = [
-                {
-                    "id": "341098623408192255",
-                    "url": "https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-10/270243296838681150/54141dd6-7ebc-4de2-aa8c-758d00ff587e_generate_audio.mp3",
-                    "start_time": "00:00:01,466",
-                    "end_time": "00:00:02,828"
-                },
-                {
-                    "id": "3633002812117896102",
-                    "url": "https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-08/270243296838681150/4c750184-2c93-449b-805b-909100a8616a_generate_audio.mp3",
-                    "start_time": "00:00:02,308",
-                    "end_time": "00:00:03,266"
-                },
-                {
-                    "id": "3455378716628597555",
-                    "url": "https://cdn-allvoice-down-testing.funnycp.com/translate-saas-test/public/audio-clone/267739879855620130/20250207/110/full_vocal_14d08dbc-26c8-47a8-82f5-8a26eadaade2_002_20250207160402_tts.wav",
-                    "start_time": "00:00:13,442",
-                    "end_time": "00:00:14,622"
-                },
-                {
-                    "id": "3860057685314390746",
-                    "url": "https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-07/270243296838681150/58e1a06d-95f3-4e98-8e0b-2e26a3d535c5_generate_audio.mp3",
-                    "start_time": "00:00:14,983",
-                    "end_time": "00:00:15,903"
-                }
-            ];
-
+            console.log('开始加载WASM模块...')
             try {
+                await init();
+                status.textContent = 'WASM模块已加载';
+
+                // 音频片段数据
+                // 为URL添加时间戳参数以防止缓存
+                const addTimestamp = (url) => {
+                    const timestamp = new Date().getTime();
+                    return `${url}${url.includes('?') ? '&' : '?'}_t=${timestamp}`;
+                };
+
+                const audioSegments = [
+                    {
+                        "id": "341098623408192255",
+                        "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-10/270243296838681150/54141dd6-7ebc-4de2-aa8c-758d00ff587e_generate_audio.mp3"),
+                        "start_time": "00:00:01,466",
+                        "end_time": "00:00:02,828"
+                    },
+                    {
+                        "id": "3633002812117896102",
+                        "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-08/270243296838681150/4c750184-2c93-449b-805b-909100a8616a_generate_audio.mp3"),
+                        "start_time": "00:00:02,308",
+                        "end_time": "00:00:03,266"
+                    },
+                    {
+                        "id": "3455378716628597555",
+                        "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/translate-saas-test/public/audio-clone/267739879855620130/20250207/110/full_vocal_14d08dbc-26c8-47a8-82f5-8a26eadaade2_002_20250207160402_tts.wav"),
+                        "start_time": "00:00:13,442",
+                        "end_time": "00:00:14,622"
+                    },
+                    {
+                        "id": "3860057685314390746",
+                        "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-07/270243296838681150/58e1a06d-95f3-4e98-8e0b-2e26a3d535c5_generate_audio.mp3"),
+                        "start_time": "00:00:14,983",
+                        "end_time": "00:00:15,903"
+                    }
+                ];
+
                 status.textContent = '开始合成音频...';
                 window.progress_callback = function (percent, stage) {
                     console.log(`Progress: ${percent}% (${stage})`);
-                    // 这里可以更新UI显示进度
+                    status.textContent = `音频处理中: ${percent}% (${stage})`;
                 };
-                // 调用WASM函数合成音频
-                const base64Audio = await synthesize_audio(JSON.stringify(audioSegments));
+
+                // 创建音频合成器实例并初始化
+                const synthesizer = new AudioSynthesizer(JSON.stringify(audioSegments), 10, 100);
+                await synthesizer.init();
+
+                // 合成音频
+                const audioData = await synthesizer.compose();
                 status.textContent = '音频合成完成！';
 
-                // 将Base64音频数据转换为Blob
-                const byteCharacters = atob(base64Audio);
-                const byteNumbers = new Array(byteCharacters.length);
-                for (let i = 0; i < byteCharacters.length; i++) {
-                    byteNumbers[i] = byteCharacters.charCodeAt(i);
-                }
-                const byteArray = new Uint8Array(byteNumbers);
-                const audioBlob = new Blob([byteArray], { type: 'audio/mp3' });
+                // 直接使用返回的ArrayBuffer创建Blob
+                const audioBlob = new Blob([audioData], { type: 'audio/mp3' });
 
                 // 创建音频URL并播放
                 const audioUrl = URL.createObjectURL(audioBlob);
@@ -119,6 +127,11 @@
                 downloadLink.textContent = '下载合成的音频';
                 downloadLink.className = 'download-link';
                 document.querySelector('.container').appendChild(downloadLink);
+
+                // 在音频加载完成后释放Blob URL
+                audioElement.onload = () => {
+                    URL.revokeObjectURL(audioUrl);
+                };
 
             } catch (error) {
                 status.textContent = `音频合成失败: ${error}`;
