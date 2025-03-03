@@ -173,10 +173,22 @@ impl AudioSynthesizer {
         if !self.segments.contains_key(&segment.id) {
             return Err(AudioError::SegmentNotFound(segment.id.clone()).into());
         }
-
-        safe_progress_callback(0.0, "downloading");
-        segment.download().await?;
-        safe_progress_callback(100.0, "complete");
+        
+        // 获取原有的音频片段
+        let existing_segment = self.segments.get(&segment.id).unwrap();
+        
+        // 检查URL是否发生变化
+        if existing_segment.url == segment.url {
+            console_log!("URL未变化，复用原有音频数据: {}", segment.url);
+            // 复用原有的音频数据
+            segment.buffer = existing_segment.buffer.clone();
+        } else {
+            // URL已变化，需要重新下载
+            console_log!("URL已变化，重新下载音频: {} -> {}", existing_segment.url, segment.url);
+            safe_progress_callback(0.0, "downloading");
+            segment.download().await?;
+            safe_progress_callback(100.0, "complete");
+        }
 
         self.segments.insert(segment.id.clone(), segment);
         Ok(())
