@@ -123,17 +123,18 @@ wasm-pack build --target web
 
 #### AudioSynthesizer 类
 
-构造函数：`new AudioSynthesizer(json_input: string, merge_batch_size?: number, download_batch_size?: number)`
+构造函数：`new AudioSynthesizer(json_input: string, merge_batch_size?: number, download_batch_size?: number, enable_logging?: boolean)`
 
 - `json_input`：包含音频片段信息的JSON字符串
 - `merge_batch_size`：（可选）合并音频时的批处理大小，默认为20
 - `download_batch_size`：（可选）并行下载音频时的批处理大小，默认为100
+- `enable_logging`：（可选）是否启用日志输出，默认为true
 
 主要方法：
 
 - `init(): Promise<void>`：初始化并下载所有音频片段
 - `compose(): Promise<Uint8Array>`：合成所有音频片段并返回二进制数据
-- `add(json_segment: string, pre_id: string): Promise<void>`：添加新的音频片段，pre_id为"-1"时添加到首位，否则在指定ID的片段后插入
+- `add(json_segment: string, pre_id: string): Promise<void>`：添加新的音频片段。当pre_id为"-1"时，新片段将被添加到数组的首位；否则，新片段将被插入到指定ID的片段之后
 - `update(json_segment: string): Promise<void>`：更新现有的音频片段
 - `delete(id: string): void`：删除指定ID的音频片段
 

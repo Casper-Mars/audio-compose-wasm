@@ -1,7 +1,6 @@
-use anyhow::{Result};
+use anyhow::Result;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
-// use std::collections::HashMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -43,17 +42,23 @@ mod audio {
     }
 
     impl Segment {
-        pub async fn download(&mut self) -> Result<(), AudioError> {
-            console_log!("开始下载音频文件: {}", self.url);
+        pub async fn download(&mut self, enable_logging: bool) -> Result<(), AudioError> {
+            if enable_logging {
+                console_log!("开始下载音频文件: {}", self.url);
+            }
             let client = reqwest::Client::builder()
                 .build()
                 .map_err(|e| AudioError::DownloadError(e.to_string()))?;
                 
-            console_log!("发送请求中...");
+            if enable_logging {
+                console_log!("发送请求中...");
+            }
             let response = client.get(&self.url)
                 .send().await
                 .map_err(|e| AudioError::DownloadError(e.to_string()))?;
-            console_log!("响应了");
+            if enable_logging {
+                console_log!("响应了");
+            }
             
             if !response.status().is_success() {
                 return Err(AudioError::DownloadError(format!("Failed to download audio: {}", response.status())));
@@ -72,6 +77,7 @@ pub struct AudioSynthesizer {
     segments: Vec<audio::Segment>,
     merge_batch_size: usize,
     download_batch_size: usize,
+    enable_logging: bool,
 }
 
 #[wasm_bindgen]
@@ -81,30 +87,40 @@ impl AudioSynthesizer {
         json_input: &str,
         merge_batch_size: Option<usize>,
         download_batch_size: Option<usize>,
+        enable_logging: Option<bool>,
     ) -> Result<AudioSynthesizer, JsValue> {
         console_error_panic_hook::set_once();
-        console_log!("AudioSynthesizer初始化开始，解析JSON数据...");
+        let enable_logging = enable_logging.unwrap_or(true);
+        if enable_logging {
+            console_log!("AudioSynthesizer初始化开始，解析JSON数据...");
+        }
         let segments: Vec<audio::Segment> =
             serde_json::from_str(json_input).map_err(|e| AudioError::JsonParseError(e))?;
 
-        console_log!("JSON解析完成，共有{}个音频片段", segments.len());
-        
-        console_log!("音频合成器创建完成，需要调用init方法下载音频");
+        if enable_logging {
+            console_log!("JSON解析完成，共有{}个音频片段", segments.len());
+            console_log!("音频合成器创建完成，需要调用init方法下载音频");
+        }
 
         Ok(AudioSynthesizer {
             segments,
             merge_batch_size: merge_batch_size.unwrap_or(20),
             download_batch_size: download_batch_size.unwrap_or(100),
+            enable_logging,
         })
     }
     
     // 新增初始化方法，负责下载音频片段
     pub async fn init(&mut self) -> Result<(), JsValue> {
         let total_segments = self.segments.len();
-        console_log!("开始初始化，准备下载{}个音频片段...", total_segments);
+        if self.enable_logging {
+            console_log!("开始初始化，准备下载{}个音频片段...", total_segments);
+        }
         
         if total_segments == 0 {
-            console_log!("没有音频片段需要下载");
+            if self.enable_logging {
+                console_log!("没有音频片段需要下载");
+            }
             return Ok(());
         }
         
@@ -114,10 +130,12 @@ impl AudioSynthesizer {
         let total_batches = (total_segments + self.download_batch_size - 1) / self.download_batch_size;
         
         for (batch_index, batch) in self.segments.chunks_mut(self.download_batch_size).enumerate() {
-            console_log!("开始下载第{}/{}批音频片段...", batch_index + 1, total_batches);
+            if self.enable_logging {
+                console_log!("开始下载第{}/{}批音频片段...", batch_index + 1, total_batches);
+            }
             
             // 创建当前批次的下载任务
-            let download_tasks = batch.iter_mut().map(|segment| segment.download());
+            let download_tasks = batch.iter_mut().map(|segment| segment.download(self.enable_logging));
             
             // 并行执行当前批次的下载任务
             let results = join_all(download_tasks).await;
@@ -125,7 +143,9 @@ impl AudioSynthesizer {
             // 检查当前批次的下载结果
             for result in results {
                 if let Err(e) = result {
-                    console_log!("下载过程中发生错误: {}", e);
+                    if self.enable_logging {
+                        console_log!("下载过程中发生错误: {}", e);
+                    }
                     return Err(e.into());
                 }
             }
@@ -136,7 +156,9 @@ impl AudioSynthesizer {
         }
 
         safe_progress_callback(100.0, "complete");
-        console_log!("音频合成器初始化完成，可以开始合成音频");
+        if self.enable_logging {
+            console_log!("音频合成器初始化完成，可以开始合成音频");
+        }
         
         Ok(())
     }
@@ -146,7 +168,7 @@ impl AudioSynthesizer {
             serde_json::from_str(json_segment).map_err(|e| AudioError::JsonParseError(e))?;
 
         safe_progress_callback(0.0, "downloading");
-        segment.download().await?;
+        segment.download(self.enable_logging).await?;
         safe_progress_callback(100.0, "complete");
 
         // 如果pre_id为"-1"，则添加到数组首位
@@ -181,14 +203,18 @@ impl AudioSynthesizer {
         
         // 检查URL是否发生变化
         if existing_segment.url == segment.url {
-            console_log!("URL未变化，复用原有音频数据: {}", segment.url);
+            if self.enable_logging {
+                console_log!("URL未变化，复用原有音频数据: {}", segment.url);
+            }
             // 复用原有的音频数据
             segment.buffer = existing_segment.buffer.clone();
         } else {
             // URL已变化，需要重新下载
-            console_log!("URL已变化，重新下载音频: {} -> {}", existing_segment.url, segment.url);
+            if self.enable_logging {
+                console_log!("URL已变化，重新下载音频: {} -> {}", existing_segment.url, segment.url);
+            }
             safe_progress_callback(0.0, "downloading");
-            segment.download().await?;
+            segment.download(self.enable_logging).await?;
             safe_progress_callback(100.0, "complete");
         }
 
