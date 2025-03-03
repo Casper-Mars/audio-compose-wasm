@@ -133,7 +133,7 @@ wasm-pack build --target web
 
 - `init(): Promise<void>`：初始化并下载所有音频片段
 - `compose(): Promise<Uint8Array>`：合成所有音频片段并返回二进制数据
-- `add(json_segment: string): Promise<void>`：添加新的音频片段
+- `add(json_segment: string, pre_id: string): Promise<void>`：添加新的音频片段，pre_id为"-1"时添加到首位，否则在指定ID的片段后插入
 - `update(json_segment: string): Promise<void>`：更新现有的音频片段
 - `delete(id: string): void`：删除指定ID的音频片段
 

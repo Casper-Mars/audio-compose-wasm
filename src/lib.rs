@@ -149,9 +149,9 @@ impl AudioSynthesizer {
         segment.download().await?;
         safe_progress_callback(100.0, "complete");
 
-        // 如果pre_id为"-1"，则添加到数组末尾
+        // 如果pre_id为"-1"，则添加到数组首位
         if pre_id == "-1" {
-            self.segments.push(segment);
+            self.segments.insert(0, segment);
         } else {
             // 查找pre_id对应的位置
             let position = self.segments.iter().position(|s| s.id == pre_id)
