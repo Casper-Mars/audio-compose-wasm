@@ -392,71 +392,31 @@ impl AudioSynthesizer {
 
         safe_progress_callback(0.0, "processing");
 
-        // 第一步：使用已解码的音频数据
         let mut max_sample_rate = 24000;
         let mut max_channels = 1;
         let mut max_end_time_ms = 0;
-
-        // 创建解码任务 - 对于未解码的片段进行解码，对于已解码的片段直接使用缓存数据
-        let decode_tasks = self.segments.chunks(self.merge_batch_size).map(|batch| {
-            let batch = batch.to_vec();
-            let enable_logging = self.enable_logging;
-            async move {
-                let mut decoded_segments = Vec::new();
-                for segment in batch {
-                    // 检查是否有缓存的解码数据
-                    if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
-                        if enable_logging {
-                            console_log!("使用缓存的解码数据，无需重新解码");
-                        }
-                        let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
-                        decoded_segments.push((samples.clone(), *sample_rate, *channels, start_time_ms));
-                    } else {
-                        // 如果没有缓存数据，则需要解码
-                        if enable_logging {
-                            console_log!("未找到缓存数据，需要解码");
-                        }
-                        match segment.decode(enable_logging) {
-                            Ok((samples, sample_rate, channels)) => {
-                                let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
-                                decoded_segments.push((samples, sample_rate, channels, start_time_ms));
-                            }
-                            Err(e) => {
-                                if enable_logging {
-                                    console_log!("解码音频片段失败: {}, 跳过此片段", e);
-                                }
-                            }
-                        }
-                    }
-                }
-                decoded_segments
-            }
-        });
-
-        // 并行执行所有解码任务
-        let decode_results = join_all(decode_tasks).await;
-
-        // 收集所有解码结果
         let mut all_decoded_segments = Vec::new();
-        for result in decode_results {
-            for (samples, sample_rate, channels, start_time_ms) in result {
-                // 更新最大采样率和声道数
-                if sample_rate > max_sample_rate {
-                    max_sample_rate = sample_rate;
+
+        for segment in &self.segments {
+            if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
+                let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
+                
+                if *sample_rate > max_sample_rate {
+                    max_sample_rate = *sample_rate;
                 }
-                if channels > max_channels {
-                    max_channels = channels;
+                if *channels > max_channels {
+                    max_channels = *channels;
                 }
 
-                // 计算结束时间
-                let duration_ms =
-                    (samples.len() as u64 * 1000) / (sample_rate as u64 * channels as u64);
+                let duration_ms = (samples.len() as u64 * 1000) / (*sample_rate as u64 * *channels as u64);
                 let end_time_ms = start_time_ms + duration_ms;
                 if end_time_ms > max_end_time_ms {
                     max_end_time_ms = end_time_ms;
                 }
 
-                all_decoded_segments.push((samples, sample_rate, channels, start_time_ms));
+                all_decoded_segments.push((samples.clone(), *sample_rate, *channels, start_time_ms));
+            } else if self.enable_logging {
+                console_log!("跳过未解码的音频片段: {}", segment.id);
             }
         }
 
