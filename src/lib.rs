@@ -3,17 +3,148 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-// 定义音频片段结构
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AudioSegment {
-    id: String,
-    url: String,
-    start_time: String, // 格式: "00:00:01,466"
-    end_time: String,   // 格式: "00:00:02,828"
-    #[serde(skip)]
-    buffer: Vec<u8>, // 存储下载的音频数据
+#[derive(Error, Debug)]
+pub enum AudioError {
+    #[error("Failed to parse JSON: {0}")]
+    JsonParseError(#[from] serde_json::Error),
+    
+    #[error("Failed to download audio: {0}")]
+    DownloadError(String),
+    
+    #[error("Invalid timestamp format: {0}")]
+    TimestampError(String),
+    
+    #[error("Segment not found: {0}")]
+    SegmentNotFound(String),
+    
+    #[error("Internal error: {0}")]
+    InternalError(String)
+}
+
+impl From<AudioError> for JsValue {
+    fn from(error: AudioError) -> Self {
+        JsValue::from(JsError::new(&error.to_string()))
+    }
+}
+
+mod audio {
+    use super::*;
+    
+    #[derive(Serialize, Deserialize, Clone, Debug)]
+    pub struct Segment {
+        pub id: String,
+        pub url: String,
+        pub start_time: String,
+        pub end_time: String,
+        #[serde(skip)]
+        pub buffer: Vec<u8>,
+    }
+    
+    impl Segment {
+        pub async fn download(&mut self) -> Result<(), AudioError> {
+            self.buffer = download_audio(&self.url)
+                .await
+                .map_err(|e| AudioError::DownloadError(e.to_string()))?;
+            Ok(())
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct AudioSynthesizer {
+    segments: HashMap<String, audio::Segment>,
+}
+
+#[wasm_bindgen]
+impl AudioSynthesizer {
+    #[wasm_bindgen(constructor)]
+    pub fn new(json_input: &str) -> Result<AudioSynthesizer, JsValue> {
+        console_error_panic_hook::set_once();
+        let segments: Vec<audio::Segment> = serde_json::from_str(json_input)
+            .map_err(|e| AudioError::JsonParseError(e))?;
+
+        let mut map = HashMap::new();
+        for segment in segments {
+            map.insert(segment.id.clone(), segment);
+        }
+
+        Ok(AudioSynthesizer { segments: map })
+    }
+
+    pub async fn add(&mut self, json_segment: &str) -> Result<(), JsValue> {
+        let mut segment: audio::Segment = serde_json::from_str(json_segment)
+            .map_err(|e| AudioError::JsonParseError(e))?;
+
+        safe_progress_callback(0.0, "downloading");
+        segment.download().await?;
+        safe_progress_callback(100.0, "complete");
+
+        self.segments.insert(segment.id.clone(), segment);
+        Ok(())
+    }
+
+    pub fn delete(&mut self, id: &str) -> Result<(), JsValue> {
+        self.segments.remove(id)
+            .ok_or_else(|| AudioError::SegmentNotFound(id.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn update(&mut self, json_segment: &str) -> Result<(), JsValue> {
+        let mut segment: audio::Segment = serde_json::from_str(json_segment)
+            .map_err(|e| AudioError::JsonParseError(e))?;
+
+        if !self.segments.contains_key(&segment.id) {
+            return Err(AudioError::SegmentNotFound(segment.id.clone()).into());
+        }
+
+        safe_progress_callback(0.0, "downloading");
+        segment.download().await?;
+        safe_progress_callback(100.0, "complete");
+
+        self.segments.insert(segment.id.clone(), segment);
+        Ok(())
+    }
+
+    // 合成音频
+    pub async fn compose(&self) -> Result<String, JsValue> {
+        let mut segments: Vec<audio::Segment> = self.segments.values().cloned().collect();
+
+        // 按开始时间排序
+        segments.sort_by(|a, b| {
+            let a_time = parse_timestamp(&a.start_time).unwrap_or(0);
+            let b_time = parse_timestamp(&b.start_time).unwrap_or(0);
+            a_time.cmp(&b_time)
+        });
+
+        // 并发合并音频数据
+        const MERGE_BATCH_SIZE: usize = 10; // 每批处理10个片段
+        let merge_tasks = segments.chunks(MERGE_BATCH_SIZE).map(|batch| {
+            let batch = batch.to_vec();
+            async move {
+                let mut batch_audio = Vec::new();
+                for segment in batch {
+                    batch_audio.extend(segment.buffer);
+                }
+                batch_audio
+            }
+        });
+
+        // 并行执行所有合并任务
+        let merge_results = join_all(merge_tasks).await;
+
+        // 按顺序组合所有批次的结果
+        let mut combined_audio = Vec::new();
+        for result in merge_results {
+            combined_audio.extend(result);
+        }
+
+        safe_progress_callback(100.0, "complete");
+        Ok(STANDARD.encode(&combined_audio))
+    }
 }
 
 // 定义进度回调函数类型
@@ -34,6 +165,25 @@ fn safe_progress_callback(percent: f64, stage: &str) {
     if has_progress_callback() {
         progress_callback(percent, stage);
     }
+}
+
+// 添加控制台日志功能
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+// 辅助宏，用于在WASM中打印日志
+#[macro_export]
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format!($($t)*)))
+}
+
+// 初始化函数
+#[wasm_bindgen(start)]
+pub fn init() {
+    console_log!("WASM Audio Synthesizer initialized");
 }
 
 // 解析时间戳为毫秒
@@ -67,113 +217,4 @@ async fn download_audio(url: &str) -> Result<Vec<u8>> {
 
     let bytes = response.bytes().await?;
     Ok(bytes.to_vec())
-}
-
-// 处理一批音频片段
-async fn process_batch(batch: Vec<AudioSegment>) -> Result<Vec<u8>, anyhow::Error> {
-    // 创建下载任务
-    let download_tasks = batch.iter().map(|segment| {
-        let url = segment.url.clone();
-        async move {
-            let buffer = download_audio(&url)
-                .await
-                .map_err(|e| anyhow!("Failed to download {}: {}", url, e))?;
-            Ok::<(String, Vec<u8>), anyhow::Error>((url, buffer))
-        }
-    });
-
-    // 并行下载所有音频
-    let results: Vec<Result<(String, Vec<u8>), anyhow::Error>> = join_all(download_tasks).await;
-
-    // 处理下载结果
-    let mut download_map = std::collections::HashMap::new();
-    for result in results {
-        match result {
-            Ok((url, buffer)) => {
-                download_map.insert(url, buffer);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    // 将下载的音频数据填充到对应的段中
-    let mut segments = batch;
-    for segment in &mut segments {
-        if let Some(buffer) = download_map.get(&segment.url) {
-            segment.buffer = buffer.clone();
-        } else {
-            return Err(anyhow!("Missing buffer for {}", segment.url));
-        }
-    }
-
-    // 按开始时间排序
-    segments.sort_by(|a, b| {
-        let a_time = parse_timestamp(&a.start_time).unwrap_or(0);
-        let b_time = parse_timestamp(&b.start_time).unwrap_or(0);
-        a_time.cmp(&b_time)
-    });
-
-    // 合并音频数据
-    let mut combined_audio = Vec::new();
-    for segment in segments {
-        combined_audio.extend(segment.buffer);
-    }
-
-    Ok(combined_audio)
-}
-
-// WASM导出函数：合成音频
-#[wasm_bindgen]
-pub async fn synthesize_audio(json_input: &str) -> Result<String, JsValue> {
-    // 设置panic钩子，将Rust的panic转换为JavaScript错误
-    console_error_panic_hook::set_once();
-
-    // 解析输入JSON
-    let segments: Vec<AudioSegment> = serde_json::from_str(json_input)
-        .map_err(|e| JsValue::from(JsError::new(&format!("Failed to parse JSON: {}", e))))?;
-
-    // 分批处理参数
-    const BATCH_SIZE: usize = 50; // 每批处理50个音频片段
-    let total_segments = segments.len();
-    let mut combined_audio = Vec::new();
-
-    // 分批处理音频片段
-    for (batch_index, batch) in segments.chunks(BATCH_SIZE).enumerate() {
-        let progress = (batch_index * BATCH_SIZE) as f64 / total_segments as f64 * 100.0;
-        safe_progress_callback(progress, "downloading");
-
-        let batch_result = process_batch(batch.to_vec())
-            .await
-            .map_err(|e| JsValue::from(JsError::new(&e.to_string())))?;
-
-        combined_audio.extend(batch_result);
-    }
-
-    safe_progress_callback(100.0, "encoding");
-
-    // 将合并后的音频数据转换为Base64字符串
-    let base64_audio = STANDARD.encode(&combined_audio);
-
-    safe_progress_callback(100.0, "complete");
-
-    Ok(base64_audio)
-}
-
-// 添加控制台日志功能
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-// 辅助宏，用于在WASM中打印日志
-#[macro_export]
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format!($($t)*)))
-}
-
-// 初始化函数
-#[wasm_bindgen(start)]
-pub fn init() {
-    console_log!("WASM Audio Synthesizer initialized");
 }
