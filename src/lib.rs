@@ -392,33 +392,40 @@ impl AudioSynthesizer {
 
         safe_progress_callback(0.0, "processing");
 
-        let mut max_sample_rate = 24000;
-        let mut max_channels = 1;
-        let mut max_end_time_ms = 0;
-        let mut all_decoded_segments = Vec::new();
+        use rayon::prelude::*;
 
-        for segment in &self.segments {
-            if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
-                let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
-                
-                if *sample_rate > max_sample_rate {
-                    max_sample_rate = *sample_rate;
-                }
-                if *channels > max_channels {
-                    max_channels = *channels;
-                }
-
-                let duration_ms = (samples.len() as u64 * 1000) / (*sample_rate as u64 * *channels as u64);
-                let end_time_ms = start_time_ms + duration_ms;
-                if end_time_ms > max_end_time_ms {
-                    max_end_time_ms = end_time_ms;
-                }
-
-                all_decoded_segments.push((samples.clone(), *sample_rate, *channels, start_time_ms));
-            } else if self.enable_logging {
-                console_log!("跳过未解码的音频片段: {}", segment.id);
-            }
+        // 第一步：并行处理所有片段的基本信息
+        if self.enable_logging{
+            console_log!("开始并行处理所有音频片段的基本信息");
         }
+        let (max_sample_rate, max_channels, max_end_time_ms, all_decoded_segments) = {
+            let mut all_decoded_segments = Vec::new();
+            let mut max_sample_rate = 24000;
+            let mut max_channels = 1;
+            let mut max_end_time_ms = 0;
+
+            // 并行迭代处理每个片段
+            let segments_info: Vec<_> = self.segments.par_iter().filter_map(|segment| {
+                if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
+                    let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
+                    let duration_ms = (samples.len() as u64 * 1000) / (*sample_rate as u64 * *channels as u64);
+                    Some((*sample_rate, *channels, start_time_ms, duration_ms, samples.clone()))
+                } else {
+                    None
+                }
+            }).collect();
+
+            // 处理收集到的信息
+            for (sample_rate, channels, start_time_ms, duration_ms, samples) in segments_info {
+                max_sample_rate = max_sample_rate.max(sample_rate);
+                max_channels = max_channels.max(channels);
+                let end_time_ms = start_time_ms + duration_ms;
+                max_end_time_ms = max_end_time_ms.max(end_time_ms);
+                all_decoded_segments.push((samples, sample_rate, channels, start_time_ms));
+            }
+
+            (max_sample_rate, max_channels, max_end_time_ms, all_decoded_segments)
+        };
 
         if self.enable_logging {
             console_log!(
@@ -431,67 +438,91 @@ impl AudioSynthesizer {
 
         // 计算输出缓冲区大小
         let total_samples = (max_end_time_ms as u32 * max_sample_rate * max_channels) / 1000;
-        let mut output_buffer = vec![0.0f32; total_samples as usize];
+        let mut output_buffer;
 
         safe_progress_callback(30.0, "mixing");
 
-        // 第二步：混合所有音频片段
-        for (samples, sample_rate, channels, start_time_ms) in all_decoded_segments {
-            // 计算起始样本位置
-            let start_sample = (start_time_ms as u32 * max_sample_rate * max_channels) / 1000;
+        // 第二步：并行混合所有音频片段
+        if self.enable_logging {
+            console_log!("开始并行混合所有音频片段");
+        }
+        let chunks: Vec<_> = all_decoded_segments
+            .par_chunks(self.merge_batch_size)
+            .map(|batch| {
+                let mut batch_buffer = vec![0.0f32; total_samples as usize];
+                for (samples, sample_rate, channels, start_time_ms) in batch {
+                    // 计算起始样本位置
+                    let start_sample = (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
 
-            // 如果需要重采样
-            if sample_rate != max_sample_rate || channels != max_channels {
-                // 简单重采样（实际项目中可能需要更复杂的重采样算法）
-                let ratio = max_sample_rate as f32 / sample_rate as f32;
-                let channel_ratio = max_channels as f32 / channels as f32;
+                    // 如果需要重采样
+                    if *sample_rate != max_sample_rate || *channels != max_channels {
+                        let ratio = max_sample_rate as f32 / *sample_rate as f32;
+                        let channel_ratio = max_channels as f32 / *channels as f32;
 
-                for i in 0..samples.len() / channels as usize {
-                    let src_pos = i * channels as usize;
-                    let dst_pos = (start_sample as usize)
-                        + ((i as f32 * ratio) as usize * max_channels as usize);
+                        for i in 0..samples.len() / *channels as usize {
+                            let src_pos = i * *channels as usize;
+                            let dst_pos = (start_sample as usize)
+                                + ((i as f32 * ratio) as usize * max_channels as usize);
 
-                    if dst_pos + max_channels as usize <= output_buffer.len() {
-                        for c in 0..channels as usize {
-                            let dst_channel = (c as f32 * channel_ratio) as usize;
-                            if dst_channel < max_channels as usize && src_pos + c < samples.len() {
-                                output_buffer[dst_pos + dst_channel] += samples[src_pos + c];
+                            if dst_pos + max_channels as usize <= batch_buffer.len() {
+                                for c in 0..*channels as usize {
+                                    let dst_channel = (c as f32 * channel_ratio) as usize;
+                                    if dst_channel < max_channels as usize && src_pos + c < samples.len() {
+                                        batch_buffer[dst_pos + dst_channel] += samples[src_pos + c];
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // 直接混合，无需重采样
+                        for i in 0..samples.len() {
+                            let dst_pos = start_sample as usize + i;
+                            if dst_pos < batch_buffer.len() {
+                                batch_buffer[dst_pos] += samples[i];
                             }
                         }
                     }
                 }
-            } else {
-                // 直接混合，无需重采样
-                for i in 0..samples.len() {
-                    let dst_pos = start_sample as usize + i;
-                    if dst_pos < output_buffer.len() {
-                        output_buffer[dst_pos] += samples[i];
+                batch_buffer
+            })
+            .collect();
+
+        // 合并所有批次的结果
+        output_buffer = chunks.into_par_iter()
+            .reduce(|| vec![0.0f32; total_samples as usize],
+                |mut acc, chunk| {
+                    for (i, sample) in chunk.iter().enumerate() {
+                        acc[i] += sample;
                     }
-                }
-            }
-        }
+                    acc
+                });
 
         safe_progress_callback(70.0, "encoding");
 
-        // 第三步：归一化音频（防止削波）
-        let mut max_amplitude = 0.0f32;
-        for sample in &output_buffer {
-            let abs_sample = sample.abs();
-            if abs_sample > max_amplitude {
-                max_amplitude = abs_sample;
-            }
+        // 第三步：并行计算最大振幅
+        if self.enable_logging {
+            console_log!("开始并行计算最大振幅");
         }
+        let max_amplitude = output_buffer
+            .par_iter()
+            .map(|sample| sample.abs())
+            .reduce(|| 0.0f32, f32::max);
 
         let scale_factor = if max_amplitude > 1.0 {
             1.0 / max_amplitude
         } else {
             1.0
         };
-        for sample in &mut output_buffer {
+
+        // 并行应用缩放因子
+        output_buffer.par_iter_mut().for_each(|sample| {
             *sample *= scale_factor;
-        }
+        });
 
         // 第四步：将浮点样本转换为16位PCM WAV格式
+        if self.enable_logging {
+            console_log!("开始将浮点样本转换为16位PCM WAV格式");
+        }
         let mut wav_data = Vec::new();
 
         // WAV头部
