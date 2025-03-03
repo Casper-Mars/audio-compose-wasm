@@ -54,40 +54,66 @@ wasm-pack build --target web
     <title>WASM音频合成示例</title>
 </head>
 <body>
+    <div id="status">初始化中...</div>
+    
     <script type="module">
-        import init, { synthesize_audio } from './pkg/wasm.js';
+        import init, { AudioSynthesizer } from './pkg/wasm.js';
         
         async function run() {
-            await init();
-            
-            // 音频片段数据
-            const audioSegments = [
-                {
-                    "id": "1",
-                    "url": "https://example.com/audio1.mp3",
-                    "start_time": "00:00:01,466",
-                    "end_time": "00:00:02,828"
-                },
-                {
-                    "id": "2",
-                    "url": "https://example.com/audio2.mp3",
-                    "start_time": "00:00:02,308",
-                    "end_time": "00:00:03,266"
-                }
-            ];
-            
+            const status = document.getElementById('status');
             try {
-                // 调用WASM函数合成音频
-                const base64Audio = await synthesize_audio(JSON.stringify(audioSegments));
+                await init();
+                status.textContent = 'WASM模块已加载';
                 
-                // 处理返回的Base64音频数据...
+                // 音频片段数据
+                const audioSegments = [
+                    {
+                        "id": "1",
+                        "url": "https://example.com/audio1.mp3",
+                        "start_time": "00:00:01,466",
+                        "end_time": "00:00:02,828"
+                    },
+                    {
+                        "id": "2",
+                        "url": "https://example.com/audio2.mp3",
+                        "start_time": "00:00:02,308",
+                        "end_time": "00:00:03,266"
+                    }
+                ];
+                
+                // 设置进度回调
+                window.progress_callback = function(percent, stage) {
+                    console.log(`Progress: ${percent}% (${stage})`);
+                    status.textContent = `音频处理中: ${percent}% (${stage})`;
+                };
+                
+                // 创建音频合成器实例并初始化
+                // 参数说明: JSON字符串, 合并批次大小(可选), 下载批次大小(可选)
+                const synthesizer = new AudioSynthesizer(JSON.stringify(audioSegments), 10, 100);
+                await synthesizer.init();
+                
+                // 合成音频
+                const audioData = await synthesizer.compose();
+                status.textContent = '音频合成完成！';
+                
+                // 处理返回的二进制音频数据
+                const audioBlob = new Blob([audioData], { type: 'audio/mp3' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                // 创建音频元素播放
+                const audioElement = new Audio(audioUrl);
+                audioElement.controls = true;
+                document.body.appendChild(audioElement);
+                
                 console.log('音频合成完成');
             } catch (error) {
+                status.textContent = `音频合成失败: ${error}`;
                 console.error('音频合成失败:', error);
             }
         }
         
-        run();
+        // 页面加载完成后运行示例
+        window.addEventListener('DOMContentLoaded', run);
     </script>
 </body>
 </html>
@@ -95,10 +121,21 @@ wasm-pack build --target web
 
 ### API说明
 
-主要函数：`synthesize_audio(json_input: string): Promise<string>`
+#### AudioSynthesizer 类
 
-- 参数：包含音频片段信息的JSON字符串
-- 返回：Base64编码的合成音频数据
+构造函数：`new AudioSynthesizer(json_input: string, merge_batch_size?: number, download_batch_size?: number)`
+
+- `json_input`：包含音频片段信息的JSON字符串
+- `merge_batch_size`：（可选）合并音频时的批处理大小，默认为20
+- `download_batch_size`：（可选）并行下载音频时的批处理大小，默认为100
+
+主要方法：
+
+- `init(): Promise<void>`：初始化并下载所有音频片段
+- `compose(): Promise<Uint8Array>`：合成所有音频片段并返回二进制数据
+- `add(json_segment: string): Promise<void>`：添加新的音频片段
+- `update(json_segment: string): Promise<void>`：更新现有的音频片段
+- `delete(id: string): void`：删除指定ID的音频片段
 
 输入JSON格式：
 ```json
@@ -160,3 +197,5 @@ window.progress_callback = function(percent, stage) {
 - 由于浏览器的安全限制，音频URL必须支持CORS
 - 大文件处理可能会占用较多内存，请根据实际情况调整使用方式
 - 目前的实现是简单拼接音频数据，可能需要根据实际需求进行更复杂的音频处理
+- 可以通过调整`download_batch_size`参数控制并发下载数量，网络条件较好时可适当增大该值（如200-300），网络不稳定时建议减小该值（如50-80）
+- 对于大量小文件的场景，建议增大`download_batch_size`值以提高下载效率；对于少量大文件场景，建议减小该值以避免内存占用过高
