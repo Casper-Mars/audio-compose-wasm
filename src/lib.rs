@@ -55,29 +55,38 @@ mod audio {
 #[wasm_bindgen]
 pub struct AudioSynthesizer {
     segments: HashMap<String, audio::Segment>,
+    merge_batch_size: usize,
 }
 
 #[wasm_bindgen]
 impl AudioSynthesizer {
     #[wasm_bindgen(constructor)]
-    pub fn new(json_input: &str) -> Result<AudioSynthesizer, JsValue> {
+    pub fn new(json_input: &str, merge_batch_size: Option<usize>, download_batch_size: Option<usize>) -> Result<AudioSynthesizer, JsValue> {
         console_error_panic_hook::set_once();
         let mut segments: Vec<audio::Segment> = serde_json::from_str(json_input)
             .map_err(|e| AudioError::JsonParseError(e))?;
 
-        // 创建并发下载任务
-        let download_tasks = segments.iter_mut().map(|segment| async {
-            safe_progress_callback(0.0, "downloading");
-            segment.download().await
-        });
+        let total_segments = segments.len();
+        let download_batch_size = download_batch_size.unwrap_or(100);
 
-        // 并行执行所有下载任务
-        let results = futures::executor::block_on(join_all(download_tasks));
+        // 分批并发下载
+        for (batch_index, batch) in segments.chunks_mut(download_batch_size).enumerate() {
+            let progress = (batch_index * download_batch_size) as f64 / total_segments as f64 * 100.0;
+            safe_progress_callback(progress, "downloading");
 
-        // 检查下载结果
-        for result in results {
-            if let Err(e) = result {
-                return Err(e.into());
+            // 创建当前批次的下载任务
+            let download_tasks = batch.iter_mut().map(|segment| async {
+                segment.download().await
+            });
+
+            // 并行执行当前批次的下载任务
+            let results = futures::executor::block_on(join_all(download_tasks));
+
+            // 检查下载结果
+            for result in results {
+                if let Err(e) = result {
+                    return Err(e.into());
+                }
             }
         }
 
@@ -89,7 +98,10 @@ impl AudioSynthesizer {
             map.insert(segment.id.clone(), segment);
         }
 
-        Ok(AudioSynthesizer { segments: map })
+        Ok(AudioSynthesizer { 
+            segments: map,
+            merge_batch_size: merge_batch_size.unwrap_or(20)
+        })
     }
 
     pub async fn add(&mut self, json_segment: &str) -> Result<(), JsValue> {
@@ -138,8 +150,7 @@ impl AudioSynthesizer {
         });
 
         // 并发合并音频数据
-        const MERGE_BATCH_SIZE: usize = 10; // 每批处理10个片段
-        let merge_tasks = segments.chunks(MERGE_BATCH_SIZE).map(|batch| {
+        let merge_tasks = segments.chunks(self.merge_batch_size).map(|batch| {
             let batch = batch.to_vec();
             async move {
                 let mut batch_audio = Vec::new();
