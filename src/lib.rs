@@ -1,6 +1,4 @@
 use anyhow::{anyhow, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -64,9 +62,28 @@ impl AudioSynthesizer {
     #[wasm_bindgen(constructor)]
     pub fn new(json_input: &str) -> Result<AudioSynthesizer, JsValue> {
         console_error_panic_hook::set_once();
-        let segments: Vec<audio::Segment> = serde_json::from_str(json_input)
+        let mut segments: Vec<audio::Segment> = serde_json::from_str(json_input)
             .map_err(|e| AudioError::JsonParseError(e))?;
 
+        // 创建并发下载任务
+        let download_tasks = segments.iter_mut().map(|segment| async {
+            safe_progress_callback(0.0, "downloading");
+            segment.download().await
+        });
+
+        // 并行执行所有下载任务
+        let results = futures::executor::block_on(join_all(download_tasks));
+
+        // 检查下载结果
+        for result in results {
+            if let Err(e) = result {
+                return Err(e.into());
+            }
+        }
+
+        safe_progress_callback(100.0, "complete");
+
+        // 构建音频片段映射
         let mut map = HashMap::new();
         for segment in segments {
             map.insert(segment.id.clone(), segment);
@@ -110,7 +127,7 @@ impl AudioSynthesizer {
     }
 
     // 合成音频
-    pub async fn compose(&self) -> Result<String, JsValue> {
+    pub async fn compose(&self) -> Result<Box<[u8]>, JsValue> {
         let mut segments: Vec<audio::Segment> = self.segments.values().cloned().collect();
 
         // 按开始时间排序
@@ -143,7 +160,7 @@ impl AudioSynthesizer {
         }
 
         safe_progress_callback(100.0, "complete");
-        Ok(STANDARD.encode(&combined_audio))
+        Ok(combined_audio.into_boxed_slice())
     }
 }
 
