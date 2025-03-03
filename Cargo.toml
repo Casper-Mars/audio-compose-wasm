@@ -19,3 +19,5 @@ anyhow = "1.0"
 console_error_panic_hook = "0.1.7"
 base64 = "0.21"
 thiserror = "1.0"
+symphonia = { version = "0.5.4", features = ["mp3", "wav", "aac", "isomp4", "ogg", "vorbis"] }
+rayon = "1.10.0"

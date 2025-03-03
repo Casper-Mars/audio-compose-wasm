@@ -66,34 +66,29 @@
                 // 音频片段数据
                 // 为URL添加时间戳参数以防止缓存
                 const addTimestamp = (url) => {
-                    const timestamp = new Date().getTime();
-                    return `${url}${url.includes('?') ? '&' : '?'}_t=${timestamp}`;
+                    return url;
                 };
 
                 const audioSegments = [
                     {
                         "id": "341098623408192255",
                         "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-10/270243296838681150/54141dd6-7ebc-4de2-aa8c-758d00ff587e_generate_audio.mp3"),
-                        "start_time": "00:00:01,466",
-                        "end_time": "00:00:02,828"
+                        "start_time": "1466"
                     },
                     {
                         "id": "3633002812117896102",
                         "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-08/270243296838681150/4c750184-2c93-449b-805b-909100a8616a_generate_audio.mp3"),
-                        "start_time": "00:00:02,308",
-                        "end_time": "00:00:03,266"
+                        "start_time": "2308"
                     },
                     {
                         "id": "3455378716628597555",
                         "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/translate-saas-test/public/audio-clone/267739879855620130/20250207/110/full_vocal_14d08dbc-26c8-47a8-82f5-8a26eadaade2_002_20250207160402_tts.wav"),
-                        "start_time": "00:00:13,442",
-                        "end_time": "00:00:14,622"
+                        "start_time": "13442"
                     },
                     {
                         "id": "3860057685314390746",
                         "url": addTimestamp("https://cdn-allvoice-down-testing.funnycp.com/allvoice/translate-saas-test/public/videotranslate/267739879855620128/2025-02-07/270243296838681150/58e1a06d-95f3-4e98-8e0b-2e26a3d535c5_generate_audio.mp3"),
-                        "start_time": "00:00:14,983",
-                        "end_time": "00:00:15,903"
+                        "start_time": "14983"
                     }
                 ];
 
