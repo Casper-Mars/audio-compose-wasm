@@ -22,8 +22,20 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
+      - name: Install Binaryen
+        run: |
+          wget https://github.com/WebAssembly/binaryen/releases/download/version_116/binaryen-version_116-x86_64-linux.tar.gz
+          tar xf binaryen-version_116-x86_64-linux.tar.gz
+          sudo cp binaryen-version_116/bin/wasm-opt /usr/local/bin/
+
       - name: Build
         run: wasm-pack build --target web
+
+      - name: Optimize and Obfuscate WASM
+        run: |
+          cd pkg
+          wasm-opt -O3 --strip-debug --strip-producers --vacuum wasm_bg.wasm -o wasm_bg.wasm
+          cd ..
 
       - name: Create Release Archive
         run: |
