@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+// use std::collections::HashMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -69,7 +69,7 @@ mod audio {
 
 #[wasm_bindgen]
 pub struct AudioSynthesizer {
-    segments: HashMap<String, audio::Segment>,
+    segments: Vec<audio::Segment>,
     merge_batch_size: usize,
     download_batch_size: usize,
 }
@@ -89,15 +89,10 @@ impl AudioSynthesizer {
 
         console_log!("JSON解析完成，共有{}个音频片段", segments.len());
         
-        // 构建音频片段映射
-        let mut map = HashMap::new();
-        for segment in segments {
-            map.insert(segment.id.clone(), segment);
-        }
         console_log!("音频合成器创建完成，需要调用init方法下载音频");
 
         Ok(AudioSynthesizer {
-            segments: map,
+            segments,
             merge_batch_size: merge_batch_size.unwrap_or(20),
             download_batch_size: download_batch_size.unwrap_or(100),
         })
@@ -116,10 +111,9 @@ impl AudioSynthesizer {
         safe_progress_callback(0.0, "downloading");
 
         // 将所有下载任务分批处理
-        let mut segments_vec: Vec<_> = self.segments.values_mut().collect();
         let total_batches = (total_segments + self.download_batch_size - 1) / self.download_batch_size;
         
-        for (batch_index, batch) in segments_vec.chunks_mut(self.download_batch_size).enumerate() {
+        for (batch_index, batch) in self.segments.chunks_mut(self.download_batch_size).enumerate() {
             console_log!("开始下载第{}/{}批音频片段...", batch_index + 1, total_batches);
             
             // 创建当前批次的下载任务
@@ -147,7 +141,7 @@ impl AudioSynthesizer {
         Ok(())
     }
 
-    pub async fn add(&mut self, json_segment: &str) -> Result<(), JsValue> {
+    pub async fn add(&mut self, json_segment: &str, pre_id: &str) -> Result<(), JsValue> {
         let mut segment: audio::Segment =
             serde_json::from_str(json_segment).map_err(|e| AudioError::JsonParseError(e))?;
 
@@ -155,14 +149,23 @@ impl AudioSynthesizer {
         segment.download().await?;
         safe_progress_callback(100.0, "complete");
 
-        self.segments.insert(segment.id.clone(), segment);
+        // 如果pre_id为"-1"，则添加到数组末尾
+        if pre_id == "-1" {
+            self.segments.push(segment);
+        } else {
+            // 查找pre_id对应的位置
+            let position = self.segments.iter().position(|s| s.id == pre_id)
+                .ok_or_else(|| AudioError::SegmentNotFound(pre_id.to_string()))?;
+            // 在找到的位置后插入新片段
+            self.segments.insert(position + 1, segment);
+        }
         Ok(())
     }
 
     pub fn delete(&mut self, id: &str) -> Result<(), JsValue> {
-        self.segments
-            .remove(id)
+        let position = self.segments.iter().position(|segment| segment.id == id)
             .ok_or_else(|| AudioError::SegmentNotFound(id.to_string()))?;
+        self.segments.remove(position);
         Ok(())
     }
 
@@ -170,12 +173,11 @@ impl AudioSynthesizer {
         let mut segment: audio::Segment =
             serde_json::from_str(json_segment).map_err(|e| AudioError::JsonParseError(e))?;
 
-        if !self.segments.contains_key(&segment.id) {
-            return Err(AudioError::SegmentNotFound(segment.id.clone()).into());
-        }
+        let position = self.segments.iter().position(|s| s.id == segment.id)
+            .ok_or_else(|| AudioError::SegmentNotFound(segment.id.clone()))?;
         
         // 获取原有的音频片段
-        let existing_segment = self.segments.get(&segment.id).unwrap();
+        let existing_segment = &self.segments[position];
         
         // 检查URL是否发生变化
         if existing_segment.url == segment.url {
@@ -190,20 +192,15 @@ impl AudioSynthesizer {
             safe_progress_callback(100.0, "complete");
         }
 
-        self.segments.insert(segment.id.clone(), segment);
+        // 更新数组中的元素
+        self.segments[position] = segment;
         Ok(())
     }
 
     // 合成音频
     pub async fn compose(&self) -> Result<Box<[u8]>, JsValue> {
-        let mut segments: Vec<audio::Segment> = self.segments.values().cloned().collect();
-
-        // 按开始时间排序
-        segments.sort_by(|a, b| {
-            let a_time = parse_timestamp(&a.start_time).unwrap_or(0);
-            let b_time = parse_timestamp(&b.start_time).unwrap_or(0);
-            a_time.cmp(&b_time)
-        });
+        // 直接使用segments数组，保持原有顺序
+        let segments = &self.segments;
 
         // 并发合并音频数据
         let merge_tasks = segments.chunks(self.merge_batch_size).map(|batch| {
