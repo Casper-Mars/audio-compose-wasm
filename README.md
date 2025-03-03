@@ -128,7 +128,7 @@ wasm-pack build --target web
 - `json_input`：包含音频片段信息的JSON字符串
 - `merge_batch_size`：（可选）合并音频时的批处理大小，默认为20
 - `download_batch_size`：（可选）并行下载音频时的批处理大小，默认为100
-- `enable_logging`：（可选）是否启用日志输出，默认为true
+- `enable_logging`：（可选）是否启用日志输出，默认为false
 
 主要方法：
 

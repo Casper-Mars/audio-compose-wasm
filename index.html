@@ -104,7 +104,7 @@
                 };
 
                 // 创建音频合成器实例并初始化
-                const synthesizer = new AudioSynthesizer(JSON.stringify(audioSegments), 10, 100);
+                const synthesizer = new AudioSynthesizer(JSON.stringify(audioSegments), 10, 100,true);
                 await synthesizer.init();
 
                 // 合成音频

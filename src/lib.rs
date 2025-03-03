@@ -90,7 +90,7 @@ impl AudioSynthesizer {
         enable_logging: Option<bool>,
     ) -> Result<AudioSynthesizer, JsValue> {
         console_error_panic_hook::set_once();
-        let enable_logging = enable_logging.unwrap_or(true);
+        let enable_logging = enable_logging.unwrap_or(false);
         if enable_logging {
             console_log!("AudioSynthesizer初始化开始，解析JSON数据...");
         }
