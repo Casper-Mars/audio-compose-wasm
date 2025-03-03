@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 // use std::collections::HashMap;
@@ -260,27 +260,6 @@ extern "C" {
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format!($($t)*)))
 }
-
-// 解析时间戳为毫秒
-fn parse_timestamp(timestamp: &str) -> Result<u64> {
-    let parts: Vec<&str> = timestamp.split(',').collect();
-    if parts.len() != 2 {
-        return Err(anyhow!("Invalid timestamp format"));
-    }
-
-    let time_parts: Vec<&str> = parts[0].split(':').collect();
-    if time_parts.len() != 3 {
-        return Err(anyhow!("Invalid time format"));
-    }
-
-    let hours: u64 = time_parts[0].parse()?;
-    let minutes: u64 = time_parts[1].parse()?;
-    let seconds: u64 = time_parts[2].parse()?;
-    let milliseconds: u64 = parts[1].parse()?;
-
-    Ok(hours * 3600000 + minutes * 60000 + seconds * 1000 + milliseconds)
-}
-
 
 
 // 初始化函数
