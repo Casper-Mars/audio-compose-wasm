@@ -45,6 +45,8 @@ mod audio {
         pub start_time: String,
         #[serde(skip)]
         pub buffer: Vec<u8>,
+        #[serde(skip)]
+        pub decoded_data: Option<(Vec<f32>, u32, u32)>,
     }
 
     impl Segment {
@@ -177,7 +179,25 @@ mod audio {
                 .await
                 .map_err(|e| AudioError::DownloadError(e.to_string()))?;
             self.buffer = bytes.to_vec();
-            Ok(())
+            
+            // 立即解码并缓存数据
+            if enable_logging {
+                console_log!("下载完成，开始解码音频数据");
+            }
+            
+            match self.decode(enable_logging) {
+                Ok(decoded) => {
+                    // 存储解码后的数据
+                    self.decoded_data = Some(decoded);
+                    // 清空原始buffer以节省内存
+                    if enable_logging {
+                        console_log!("解码完成，释放原始数据缓冲区");
+                    }
+                    self.buffer.clear();
+                    Ok(())
+                }
+                Err(e) => Err(e)
+            }
         }
     }
 }
@@ -372,26 +392,39 @@ impl AudioSynthesizer {
 
         safe_progress_callback(0.0, "processing");
 
-        // 第一步：解码所有音频片段并获取最大采样率和声道数
+        // 第一步：使用已解码的音频数据
         let mut max_sample_rate = 24000;
         let mut max_channels = 1;
         let mut max_end_time_ms = 0;
 
-        // 创建解码任务
+        // 创建解码任务 - 对于未解码的片段进行解码，对于已解码的片段直接使用缓存数据
         let decode_tasks = self.segments.chunks(self.merge_batch_size).map(|batch| {
             let batch = batch.to_vec();
             let enable_logging = self.enable_logging;
             async move {
                 let mut decoded_segments = Vec::new();
                 for segment in batch {
-                    match segment.decode(enable_logging) {
-                        Ok((samples, sample_rate, channels)) => {
-                            let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
-                            decoded_segments.push((samples, sample_rate, channels, start_time_ms));
+                    // 检查是否有缓存的解码数据
+                    if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
+                        if enable_logging {
+                            console_log!("使用缓存的解码数据，无需重新解码");
                         }
-                        Err(e) => {
-                            if enable_logging {
-                                console_log!("解码音频片段失败: {}, 跳过此片段", e);
+                        let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
+                        decoded_segments.push((samples.clone(), *sample_rate, *channels, start_time_ms));
+                    } else {
+                        // 如果没有缓存数据，则需要解码
+                        if enable_logging {
+                            console_log!("未找到缓存数据，需要解码");
+                        }
+                        match segment.decode(enable_logging) {
+                            Ok((samples, sample_rate, channels)) => {
+                                let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
+                                decoded_segments.push((samples, sample_rate, channels, start_time_ms));
+                            }
+                            Err(e) => {
+                                if enable_logging {
+                                    console_log!("解码音频片段失败: {}, 跳过此片段", e);
+                                }
                             }
                         }
                     }
