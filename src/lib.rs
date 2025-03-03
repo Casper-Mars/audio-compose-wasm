@@ -208,12 +208,6 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format!($($t)*)))
 }
 
-// 初始化函数
-#[wasm_bindgen(start)]
-pub fn init() {
-    console_log!("WASM Audio Synthesizer initialized");
-}
-
 // 解析时间戳为毫秒
 fn parse_timestamp(timestamp: &str) -> Result<u64> {
     let parts: Vec<&str> = timestamp.split(',').collect();
