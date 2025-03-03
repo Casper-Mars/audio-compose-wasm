@@ -71,6 +71,7 @@ mod audio {
 pub struct AudioSynthesizer {
     segments: HashMap<String, audio::Segment>,
     merge_batch_size: usize,
+    download_batch_size: usize,
 }
 
 #[wasm_bindgen]
@@ -98,6 +99,7 @@ impl AudioSynthesizer {
         Ok(AudioSynthesizer {
             segments: map,
             merge_batch_size: merge_batch_size.unwrap_or(20),
+            download_batch_size: download_batch_size.unwrap_or(100),
         })
     }
     
@@ -113,22 +115,30 @@ impl AudioSynthesizer {
         
         safe_progress_callback(0.0, "downloading");
 
-        // 创建所有下载任务
-        let download_tasks = self.segments
-            .values_mut()
-            .map(|segment| segment.download());
-
-        console_log!("开始并发下载所有{}个音频片段...", total_segments);
-        // 并行执行所有下载任务
-        let results = join_all(download_tasks).await;
-        console_log!("所有音频片段下载完成");
-
-        // 检查下载结果
-        for result in results {
-            if let Err(e) = result {
-                console_log!("下载过程中发生错误: {}", e);
-                return Err(e.into());
+        // 将所有下载任务分批处理
+        let mut segments_vec: Vec<_> = self.segments.values_mut().collect();
+        let total_batches = (total_segments + self.download_batch_size - 1) / self.download_batch_size;
+        
+        for (batch_index, batch) in segments_vec.chunks_mut(self.download_batch_size).enumerate() {
+            console_log!("开始下载第{}/{}批音频片段...", batch_index + 1, total_batches);
+            
+            // 创建当前批次的下载任务
+            let download_tasks = batch.iter_mut().map(|segment| segment.download());
+            
+            // 并行执行当前批次的下载任务
+            let results = join_all(download_tasks).await;
+            
+            // 检查当前批次的下载结果
+            for result in results {
+                if let Err(e) = result {
+                    console_log!("下载过程中发生错误: {}", e);
+                    return Err(e.into());
+                }
             }
+            
+            // 更新进度
+            let progress = ((batch_index + 1) as f64 / total_batches as f64) * 100.0;
+            safe_progress_callback(progress, "downloading");
         }
 
         safe_progress_callback(100.0, "complete");
