@@ -42,7 +42,7 @@ mod audio {
     pub struct Segment {
         pub id: String,
         pub url: String,
-        pub start_time: String,
+        pub start_time: u32,
         #[serde(skip)]
         pub buffer: Vec<u8>,
         #[serde(skip)]
@@ -52,9 +52,7 @@ mod audio {
     impl Segment {
         // 解析开始时间为毫秒
         pub fn get_start_time_ms(&self) -> Result<u64, AudioError> {
-            self.start_time
-                .parse::<u64>()
-                .map_err(|e| AudioError::TimestampError(format!("无法解析开始时间: {}", e)))
+            return Ok(self.start_time as u64);
         }
 
         // 解码音频数据

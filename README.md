@@ -70,12 +70,12 @@ wasm-pack build --target web
                     {
                         "id": "1",
                         "url": "https://example.com/audio1.mp3",
-                        "start_time": "1466"
+                        "start_time": 1466
                     },
                     {
                         "id": "2",
                         "url": "https://example.com/audio2.mp3",
-                        "start_time": "2308"
+                        "start_time": 2308
                     }
                 ];
                 
