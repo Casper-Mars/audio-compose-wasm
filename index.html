@@ -99,7 +99,7 @@
                 };
 
                 // 创建音频合成器实例并初始化
-                const totalTimeMs = 19000; // 最后一个片段开始时间加30秒
+                const totalTimeMs = 1970*1000; 
                 const synthesizer = new AudioSynthesizer(totalTimeMs, JSON.stringify(audioSegments), 10, 100, true);
                 await synthesizer.init();
 
@@ -114,6 +114,14 @@
                 const audioUrl = URL.createObjectURL(audioBlob);
                 const audioElement = new Audio(audioUrl);
                 audioElement.controls = true;
+                
+                // 添加元数据加载完成的事件监听
+                audioElement.addEventListener('loadedmetadata', () => {
+                    const durationInSeconds = audioElement.duration;
+                    console.log(`音频时长: ${durationInSeconds.toFixed(2)}秒`);
+                    status.textContent = `音频合成完成！时长: ${durationInSeconds.toFixed(2)}秒`;
+                });
+                
                 document.querySelector('.container').appendChild(audioElement);
 
                 // 提供下载链接

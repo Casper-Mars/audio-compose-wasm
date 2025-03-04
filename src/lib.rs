@@ -438,7 +438,7 @@ impl AudioSynthesizer {
         }
 
         // 使用传入的总时长计算输出缓冲区大小
-        let total_samples = (self.total_time_ms as u32 * max_sample_rate * max_channels) / 1000;
+        let total_samples = ((self.total_time_ms as u64 * max_sample_rate as u64 * max_channels as u64) / 1000) as usize;
         let mut output_buffer;
 
         safe_progress_callback(30.0, "mixing");
