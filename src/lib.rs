@@ -177,12 +177,12 @@ mod audio {
                 .await
                 .map_err(|e| AudioError::DownloadError(e.to_string()))?;
             self.buffer = bytes.to_vec();
-            
+
             // 立即解码并缓存数据
             if enable_logging {
                 console_log!("下载完成，开始解码音频数据");
             }
-            
+
             match self.decode(enable_logging) {
                 Ok(decoded) => {
                     // 存储解码后的数据
@@ -194,7 +194,7 @@ mod audio {
                     self.buffer.clear();
                     Ok(())
                 }
-                Err(e) => Err(e)
+                Err(e) => Err(e),
             }
         }
     }
@@ -396,7 +396,7 @@ impl AudioSynthesizer {
         use rayon::prelude::*;
 
         // 第一步：并行处理所有片段的基本信息
-        if self.enable_logging{
+        if self.enable_logging {
             console_log!("开始并行处理所有音频片段的基本信息");
         }
         let (max_sample_rate, max_channels, max_end_time_ms, all_decoded_segments) = {
@@ -406,15 +406,26 @@ impl AudioSynthesizer {
             let mut max_end_time_ms = 0;
 
             // 并行迭代处理每个片段
-            let segments_info: Vec<_> = self.segments.par_iter().filter_map(|segment| {
-                if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
-                    let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
-                    let duration_ms = (samples.len() as u64 * 1000) / (*sample_rate as u64 * *channels as u64);
-                    Some((*sample_rate, *channels, start_time_ms, duration_ms, samples.clone()))
-                } else {
-                    None
-                }
-            }).collect();
+            let segments_info: Vec<_> = self
+                .segments
+                .par_iter()
+                .filter_map(|segment| {
+                    if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
+                        let start_time_ms = segment.get_start_time_ms().unwrap_or(0);
+                        let duration_ms = (samples.len() as u64 * 1000)
+                            / (*sample_rate as u64 * *channels as u64);
+                        Some((
+                            *sample_rate,
+                            *channels,
+                            start_time_ms,
+                            duration_ms,
+                            samples.clone(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             // 处理收集到的信息
             for (sample_rate, channels, start_time_ms, duration_ms, samples) in segments_info {
@@ -425,7 +436,12 @@ impl AudioSynthesizer {
                 all_decoded_segments.push((samples, sample_rate, channels, start_time_ms));
             }
 
-            (max_sample_rate, max_channels, max_end_time_ms, all_decoded_segments)
+            (
+                max_sample_rate,
+                max_channels,
+                max_end_time_ms,
+                all_decoded_segments,
+            )
         };
 
         if self.enable_logging {
@@ -438,7 +454,9 @@ impl AudioSynthesizer {
         }
 
         // 使用传入的总时长计算输出缓冲区大小
-        let total_samples = ((self.total_time_ms as u64 * max_sample_rate as u64 * max_channels as u64) / 1000) as usize;
+        let total_samples =
+            ((self.total_time_ms as u64 * max_sample_rate as u64 * max_channels as u64) / 1000)
+                as usize;
         let mut output_buffer;
 
         safe_progress_callback(30.0, "mixing");
@@ -453,7 +471,8 @@ impl AudioSynthesizer {
                 let mut batch_buffer = vec![0.0f32; total_samples as usize];
                 for (samples, sample_rate, channels, start_time_ms) in batch {
                     // 计算起始样本位置
-                    let start_sample = (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
+                    let start_sample =
+                        (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
 
                     // 如果需要重采样
                     if *sample_rate != max_sample_rate || *channels != max_channels {
@@ -468,7 +487,9 @@ impl AudioSynthesizer {
                             if dst_pos + max_channels as usize <= batch_buffer.len() {
                                 for c in 0..*channels as usize {
                                     let dst_channel = (c as f32 * channel_ratio) as usize;
-                                    if dst_channel < max_channels as usize && src_pos + c < samples.len() {
+                                    if dst_channel < max_channels as usize
+                                        && src_pos + c < samples.len()
+                                    {
                                         batch_buffer[dst_pos + dst_channel] += samples[src_pos + c];
                                     }
                                 }
@@ -489,14 +510,15 @@ impl AudioSynthesizer {
             .collect();
 
         // 合并所有批次的结果
-        output_buffer = chunks.into_par_iter()
-            .reduce(|| vec![0.0f32; total_samples as usize],
-                |mut acc, chunk| {
-                    for (i, sample) in chunk.iter().enumerate() {
-                        acc[i] += sample;
-                    }
-                    acc
-                });
+        output_buffer = chunks.into_par_iter().reduce(
+            || vec![0.0f32; total_samples as usize],
+            |mut acc, chunk| {
+                for (i, sample) in chunk.iter().enumerate() {
+                    acc[i] += sample;
+                }
+                acc
+            },
+        );
 
         safe_progress_callback(70.0, "encoding");
 
@@ -527,7 +549,13 @@ impl AudioSynthesizer {
         let mut wav_data = Vec::new();
 
         // WAV头部
-        let data_size = (output_buffer.len() * 2) as u32; // 16位 = 2字节/样本
+        let data_size = if output_buffer.len() * 2 > u32::MAX as usize {
+            return Err(
+                AudioError::InternalError("音频数据太大，超过WAV格式限制".to_string()).into(),
+            );
+        } else {
+            (output_buffer.len() * 2) as u32
+        };
         let file_size = 36 + data_size;
 
         // RIFF头
@@ -541,8 +569,16 @@ impl AudioSynthesizer {
         wav_data.extend_from_slice(&(1u16).to_le_bytes()); // 音频格式 (PCM)
         wav_data.extend_from_slice(&(max_channels as u16).to_le_bytes()); // 声道数
         wav_data.extend_from_slice(&(max_sample_rate as u32).to_le_bytes()); // 采样率
-        wav_data
-            .extend_from_slice(&(max_sample_rate as u32 * max_channels as u32 * 2).to_le_bytes()); // 字节率
+                                                                             // 计算字节率时避免溢出
+        let byte_rate = if (max_sample_rate as u64 * max_channels as u64 * 2) > u32::MAX as u64 {
+            return Err(AudioError::InternalError(
+                "采样率或声道数过大，超过WAV格式限制".to_string(),
+            )
+            .into());
+        } else {
+            (max_sample_rate * max_channels * 2) as u32
+        };
+        wav_data.extend_from_slice(&byte_rate.to_le_bytes());
         wav_data.extend_from_slice(&(max_channels as u16 * 2).to_le_bytes()); // 块对齐
         wav_data.extend_from_slice(&(16u16).to_le_bytes()); // 位深度
 
