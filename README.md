@@ -86,8 +86,8 @@ wasm-pack build --target web
                 };
                 
                 // 创建音频合成器实例并初始化
-                // 参数说明: JSON字符串, 合并批次大小(可选), 下载批次大小(可选)
-                const synthesizer = new AudioSynthesizer(JSON.stringify(audioSegments), 10, 100);
+                const totalTimeMs = BigInt(19000); // 设置适当的总时长
+                const synthesizer = new AudioSynthesizer(totalTimeMs, JSON.stringify(audioSegments), 10, 100, true);
                 await synthesizer.init();
                 
                 // 合成音频
@@ -121,8 +121,9 @@ wasm-pack build --target web
 
 #### AudioSynthesizer 类
 
-构造函数：`new AudioSynthesizer(json_input: string, merge_batch_size?: number, download_batch_size?: number, enable_logging?: boolean)`
+构造函数：`new AudioSynthesizer(total_time_ms: bigint, json_input: string, merge_batch_size?: number, download_batch_size?: number, enable_logging?: boolean)`
 
+- `total_time_ms`：音频总时长（毫秒），使用BigInt类型
 - `json_input`：包含音频片段信息的JSON字符串
 - `merge_batch_size`：（可选）合并音频时的批处理大小，默认为20
 - `download_batch_size`：（可选）并行下载音频时的批处理大小，默认为100

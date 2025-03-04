@@ -208,12 +208,14 @@ pub struct AudioSynthesizer {
     merge_batch_size: usize,
     download_batch_size: usize,
     enable_logging: bool,
+    total_time_ms: u64,
 }
 
 #[wasm_bindgen]
 impl AudioSynthesizer {
     #[wasm_bindgen(constructor)]
     pub fn new(
+        total_time_ms: u64,
         json_input: &str,
         merge_batch_size: Option<usize>,
         download_batch_size: Option<usize>,
@@ -237,6 +239,7 @@ impl AudioSynthesizer {
             merge_batch_size: merge_batch_size.unwrap_or(20),
             download_batch_size: download_batch_size.unwrap_or(100),
             enable_logging,
+            total_time_ms,
         })
     }
 
@@ -436,8 +439,8 @@ impl AudioSynthesizer {
             );
         }
 
-        // 计算输出缓冲区大小
-        let total_samples = (max_end_time_ms as u32 * max_sample_rate * max_channels) / 1000;
+        // 使用传入的总时长计算输出缓冲区大小
+        let total_samples = (self.total_time_ms as u32 * max_sample_rate * max_channels) / 1000;
         let mut output_buffer;
 
         safe_progress_callback(30.0, "mixing");
