@@ -357,8 +357,9 @@ impl AudioSynthesizer {
             if self.enable_logging {
                 console_log!("URL未变化，复用原有音频数据: {}", segment.url);
             }
-            // 复用原有的音频数据
+            // 复用原有的音频数据和解码后的数据
             segment.buffer = existing_segment.buffer.clone();
+            segment.decoded_data = existing_segment.decoded_data.clone();
         } else {
             // URL已变化，需要重新下载
             if self.enable_logging {
