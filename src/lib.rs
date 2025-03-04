@@ -208,14 +208,14 @@ pub struct AudioSynthesizer {
     merge_batch_size: usize,
     download_batch_size: usize,
     enable_logging: bool,
-    total_time_ms: u64,
+    total_time_ms: u32,
 }
 
 #[wasm_bindgen]
 impl AudioSynthesizer {
     #[wasm_bindgen(constructor)]
     pub fn new(
-        total_time_ms: u64,
+        total_time_ms: u32,
         json_input: &str,
         merge_batch_size: Option<usize>,
         download_batch_size: Option<usize>,

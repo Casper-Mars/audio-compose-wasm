@@ -99,7 +99,7 @@
                 };
 
                 // 创建音频合成器实例并初始化
-                const totalTimeMs = BigInt(19000); // 最后一个片段开始时间加30秒
+                const totalTimeMs = 19000; // 最后一个片段开始时间加30秒
                 const synthesizer = new AudioSynthesizer(totalTimeMs, JSON.stringify(audioSegments), 10, 100, true);
                 await synthesizer.init();
 
