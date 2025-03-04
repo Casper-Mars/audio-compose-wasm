@@ -70,14 +70,12 @@ wasm-pack build --target web
                     {
                         "id": "1",
                         "url": "https://example.com/audio1.mp3",
-                        "start_time": "00:00:01,466",
-                        "end_time": "00:00:02,828"
+                        "start_time": "1466"
                     },
                     {
                         "id": "2",
                         "url": "https://example.com/audio2.mp3",
-                        "start_time": "00:00:02,308",
-                        "end_time": "00:00:03,266"
+                        "start_time": "2308"
                     }
                 ];
                 
@@ -144,8 +142,7 @@ wasm-pack build --target web
   {
     "id": "唯一标识符",
     "url": "音频文件URL",
-    "start_time": "开始时间 (格式: 00:00:01,466)",
-    "end_time": "结束时间 (格式: 00:00:02,828)"
+    "start_time": "开始时间（毫秒），例如：1466"
   },
   ...
 ]
