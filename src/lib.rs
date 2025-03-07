@@ -466,40 +466,49 @@ impl AudioSynthesizer {
             console_log!("开始并行混合所有音频片段");
         }
 
-        all_decoded_segments.par_iter().for_each(|(samples, sample_rate, channels, start_time_ms)| {
-            // 计算起始样本位置
-            let start_sample = (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
+        // 将所有片段分批处理，每批处理merge_batch_size个片段
+        for batch in all_decoded_segments.chunks(self.merge_batch_size) {
+            // 对每批片段并行处理
+            batch.par_iter().for_each(|(samples, sample_rate, channels, start_time_ms)| {
+                // 计算起始样本位置
+                let start_sample = (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
 
-            // 如果需要重采样
-            if *sample_rate != max_sample_rate || *channels != max_channels {
-                let ratio = max_sample_rate as f32 / *sample_rate as f32;
-                let channel_ratio = max_channels as f32 / *channels as f32;
+                // 如果需要重采样
+                if *sample_rate != max_sample_rate || *channels != max_channels {
+                    let ratio = max_sample_rate as f32 / *sample_rate as f32;
+                    let channel_ratio = max_channels as f32 / *channels as f32;
 
-                for i in 0..samples.len() / *channels as usize {
-                    let src_pos = i * *channels as usize;
-                    let dst_pos = (start_sample as usize) + ((i as f32 * ratio) as usize * max_channels as usize);
+                    for i in 0..samples.len() / *channels as usize {
+                        let src_pos = i * *channels as usize;
+                        let dst_pos = (start_sample as usize) + ((i as f32 * ratio) as usize * max_channels as usize);
 
-                    if dst_pos + max_channels as usize <= total_samples {
-                        for c in 0..*channels as usize {
-                            let dst_channel = (c as f32 * channel_ratio) as usize;
-                            if dst_channel < max_channels as usize && src_pos + c < samples.len() {
-                                let mut sample = output_buffer[dst_pos + dst_channel].lock().unwrap();
-                                *sample += samples[src_pos + c];
+                        if dst_pos + max_channels as usize <= total_samples {
+                            for c in 0..*channels as usize {
+                                let dst_channel = (c as f32 * channel_ratio) as usize;
+                                if dst_channel < max_channels as usize && src_pos + c < samples.len() {
+                                    let mut sample = output_buffer[dst_pos + dst_channel].lock().unwrap();
+                                    *sample += samples[src_pos + c];
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                // 直接混合，无需重采样
-                for i in 0..samples.len() {
-                    let dst_pos = start_sample as usize + i;
-                    if dst_pos < total_samples {
-                        let mut sample = output_buffer[dst_pos].lock().unwrap();
-                        *sample += samples[i];
+                } else {
+                    // 直接混合，无需重采样
+                    for i in 0..samples.len() {
+                        let dst_pos = start_sample as usize + i;
+                        if dst_pos < total_samples {
+                            let mut sample = output_buffer[dst_pos].lock().unwrap();
+                            *sample += samples[i];
+                        }
                     }
                 }
+            });
+
+            // 在每批处理完成后可以添加一些进度更新或其他操作
+            if self.enable_logging {
+                console_log!("完成一批音频片段的混合处理");
             }
-        });
+        }
 
         let mut output_buffer: Vec<f32> = Arc::try_unwrap(output_buffer)
             .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
