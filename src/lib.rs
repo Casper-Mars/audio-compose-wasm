@@ -3,6 +3,7 @@ use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use std::sync::{Arc, Mutex};
 
 #[derive(Error, Debug)]
 pub enum AudioError {
@@ -455,71 +456,56 @@ impl AudioSynthesizer {
         }
 
         // 使用传入的总时长计算输出缓冲区大小
-        let total_samples =
-            ((self.total_time_ms as u64 * max_sample_rate as u64 * max_channels as u64) / 1000)
-                as usize;
-        let mut output_buffer;
+        let total_samples = ((self.total_time_ms as u64 * max_sample_rate as u64 * max_channels as u64) / 1000) as usize;
+        let output_buffer: Arc<Vec<Mutex<f32>>> = Arc::new((0..total_samples).map(|_| Mutex::new(0.0f32)).collect());
 
         safe_progress_callback(30.0, "mixing");
 
-        // 第二步：并行混合所有音频片段
+        // 第二步：并行处理所有音频片段，直接写入共享输出缓冲区
         if self.enable_logging {
             console_log!("开始并行混合所有音频片段");
         }
-        let chunks: Vec<_> = all_decoded_segments
-            .par_chunks(self.merge_batch_size)
-            .map(|batch| {
-                let mut batch_buffer = vec![0.0f32; total_samples as usize];
-                for (samples, sample_rate, channels, start_time_ms) in batch {
-                    // 计算起始样本位置
-                    let start_sample =
-                        (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
 
-                    // 如果需要重采样
-                    if *sample_rate != max_sample_rate || *channels != max_channels {
-                        let ratio = max_sample_rate as f32 / *sample_rate as f32;
-                        let channel_ratio = max_channels as f32 / *channels as f32;
+        all_decoded_segments.par_iter().for_each(|(samples, sample_rate, channels, start_time_ms)| {
+            // 计算起始样本位置
+            let start_sample = (start_time_ms * max_sample_rate as u64 * max_channels as u64) / 1000;
 
-                        for i in 0..samples.len() / *channels as usize {
-                            let src_pos = i * *channels as usize;
-                            let dst_pos = (start_sample as usize)
-                                + ((i as f32 * ratio) as usize * max_channels as usize);
+            // 如果需要重采样
+            if *sample_rate != max_sample_rate || *channels != max_channels {
+                let ratio = max_sample_rate as f32 / *sample_rate as f32;
+                let channel_ratio = max_channels as f32 / *channels as f32;
 
-                            if dst_pos + max_channels as usize <= batch_buffer.len() {
-                                for c in 0..*channels as usize {
-                                    let dst_channel = (c as f32 * channel_ratio) as usize;
-                                    if dst_channel < max_channels as usize
-                                        && src_pos + c < samples.len()
-                                    {
-                                        batch_buffer[dst_pos + dst_channel] += samples[src_pos + c];
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // 直接混合，无需重采样
-                        for i in 0..samples.len() {
-                            let dst_pos = start_sample as usize + i;
-                            if dst_pos < batch_buffer.len() {
-                                batch_buffer[dst_pos] += samples[i];
+                for i in 0..samples.len() / *channels as usize {
+                    let src_pos = i * *channels as usize;
+                    let dst_pos = (start_sample as usize) + ((i as f32 * ratio) as usize * max_channels as usize);
+
+                    if dst_pos + max_channels as usize <= total_samples {
+                        for c in 0..*channels as usize {
+                            let dst_channel = (c as f32 * channel_ratio) as usize;
+                            if dst_channel < max_channels as usize && src_pos + c < samples.len() {
+                                let mut sample = output_buffer[dst_pos + dst_channel].lock().unwrap();
+                                *sample += samples[src_pos + c];
                             }
                         }
                     }
                 }
-                batch_buffer
-            })
-            .collect();
-
-        // 合并所有批次的结果
-        output_buffer = chunks.into_par_iter().reduce(
-            || vec![0.0f32; total_samples as usize],
-            |mut acc, chunk| {
-                for (i, sample) in chunk.iter().enumerate() {
-                    acc[i] += sample;
+            } else {
+                // 直接混合，无需重采样
+                for i in 0..samples.len() {
+                    let dst_pos = start_sample as usize + i;
+                    if dst_pos < total_samples {
+                        let mut sample = output_buffer[dst_pos].lock().unwrap();
+                        *sample += samples[i];
+                    }
                 }
-                acc
-            },
-        );
+            }
+        });
+
+        let mut output_buffer: Vec<f32> = Arc::try_unwrap(output_buffer)
+            .unwrap_or_else(|_| panic!("Failed to unwrap Arc"))
+            .iter()
+            .map(|mutex| *mutex.lock().unwrap())
+            .collect();
 
         safe_progress_callback(70.0, "encoding");
 
