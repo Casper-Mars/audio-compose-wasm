@@ -208,6 +208,7 @@ pub struct AudioSynthesizer {
     download_batch_size: usize,
     enable_logging: bool,
     total_time_ms: u32,
+    memory_freed: bool,
 }
 
 #[wasm_bindgen]
@@ -239,11 +240,15 @@ impl AudioSynthesizer {
             download_batch_size: download_batch_size.unwrap_or(100),
             enable_logging,
             total_time_ms,
+            memory_freed: false,
         })
     }
 
     // 新增初始化方法，负责下载音频片段
     pub async fn init(&mut self) -> Result<(), JsValue> {
+        // 重置内存释放标志
+        self.memory_freed = false;
+        
         let total_segments = self.segments.len();
         if self.enable_logging {
             console_log!("开始初始化，准备下载{}个音频片段...", total_segments);
@@ -307,6 +312,11 @@ impl AudioSynthesizer {
     }
 
     pub async fn add(&mut self, json_segment: &str, pre_id: &str) -> Result<(), JsValue> {
+        // 检查内存是否已释放
+        if self.memory_freed {
+            return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
+        }
+        
         let mut segment: audio::Segment =
             serde_json::from_str(json_segment).map_err(|e| AudioError::JsonParseError(e))?;
 
@@ -331,6 +341,11 @@ impl AudioSynthesizer {
     }
 
     pub fn delete(&mut self, id: &str) -> Result<(), JsValue> {
+        // 检查内存是否已释放
+        if self.memory_freed {
+            return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
+        }
+        
         let position = self
             .segments
             .iter()
@@ -341,6 +356,11 @@ impl AudioSynthesizer {
     }
 
     pub async fn update(&mut self, json_segment: &str) -> Result<(), JsValue> {
+        // 检查内存是否已释放
+        if self.memory_freed {
+            return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
+        }
+        
         let mut segment: audio::Segment =
             serde_json::from_str(json_segment).map_err(|e| AudioError::JsonParseError(e))?;
 
@@ -380,8 +400,39 @@ impl AudioSynthesizer {
         Ok(())
     }
 
+    /// 释放内存，清空所有音频片段的缓存数据
+    /// 
+    /// 在不再需要音频数据时调用此方法可以释放内存
+    /// 调用此方法后，如果需要再次合成音频，需要重新调用init方法下载音频数据
+    #[wasm_bindgen]
+    pub fn free_memory(&mut self) -> Result<(), JsValue> {
+        if self.enable_logging {
+            console_log!("开始释放内存，清空{}个音频片段的缓存数据", self.segments.len());
+        }
+
+        // 遍历所有片段，清空buffer和decoded_data
+        for segment in &mut self.segments {
+            segment.buffer.clear();
+            segment.decoded_data = None;
+        }
+
+        // 设置内存已释放标志
+        self.memory_freed = true;
+
+        if self.enable_logging {
+            console_log!("内存释放完成");
+        }
+        
+        Ok(())
+    }
+
     // 合成音频
     pub async fn compose(&self) -> Result<Box<[u8]>, JsValue> {
+        // 检查内存是否已释放
+        if self.memory_freed {
+            return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
+        }
+        
         if self.segments.is_empty() {
             if self.enable_logging {
                 console_log!("没有音频片段需要合成");
