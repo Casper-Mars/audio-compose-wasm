@@ -300,7 +300,7 @@ impl AudioSynthesizer {
     /// 计算所有片段中的最大采样率和通道数，并根据需要对不符合标准的片段进行重采样
     /// 
     /// * `do_resample` - 是否执行重采样操作
-    pub fn update_max_audio_params_and_resample(&mut self, do_resample: bool) -> Result<(), JsValue> {
+    pub async fn update_max_audio_params_and_resample(&mut self, do_resample: bool) -> Result<(), JsValue> {
         if self.segments.is_empty() {
             return Ok(());
         }
@@ -337,14 +337,21 @@ impl AudioSynthesizer {
         }
         
         let mut resample_count = 0;
+        let resample_batch_size = self.merge_batch_size; // 每批处理100个片段
         
-        for segment in &mut self.segments {
+        // 创建一个异步函数来处理单个片段的重采样
+        async fn resample_segment(
+            segment: &mut audio::Segment,
+            max_sample_rate: u32,
+            max_channels: u32,
+            enable_logging: bool
+        ) -> bool {
             if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
                 // 如果采样率或通道数不符合标准，需要重采样
-                if *sample_rate != self.max_sample_rate || *channels != self.max_channels {
-                    if self.enable_logging {
+                if *sample_rate != max_sample_rate || *channels != max_channels {
+                    if enable_logging {
                         console_log!("重采样音频片段: {} ({}Hz, {}通道) -> ({}Hz, {}通道)", 
-                            segment.id, sample_rate, channels, self.max_sample_rate, self.max_channels);
+                            segment.id, sample_rate, channels, max_sample_rate, max_channels);
                     }
                     
                     // 使用通用重采样函数
@@ -352,16 +359,47 @@ impl AudioSynthesizer {
                         samples, 
                         *sample_rate, 
                         *channels, 
-                        self.max_sample_rate, 
-                        self.max_channels,
-                        self.enable_logging
+                        max_sample_rate, 
+                        max_channels,
+                        enable_logging
                     );
                     
                     // 更新片段的解码数据
-                    segment.decoded_data = Some((resampled_data, self.max_sample_rate, self.max_channels));
-                    resample_count += 1;
+                    segment.decoded_data = Some((resampled_data, max_sample_rate, max_channels));
+                    return true;
                 }
             }
+            false
+        }
+        
+        // 将所有重采样任务分批处理
+        let total_segments = self.segments.len();
+        let total_batches = (total_segments + resample_batch_size - 1) / resample_batch_size;
+        
+        for (batch_index, batch) in self.segments.chunks_mut(resample_batch_size).enumerate() {
+            if self.enable_logging {
+                console_log!(
+                    "开始重采样第{}/{}批音频片段...",
+                    batch_index + 1,
+                    total_batches
+                );
+            }
+            
+            // 创建当前批次的重采样任务
+            let resample_tasks = batch
+                .iter_mut()
+                .map(|segment| resample_segment(
+                    segment, 
+                    self.max_sample_rate, 
+                    self.max_channels, 
+                    self.enable_logging
+                ));
+            
+            // 并行执行当前批次的重采样任务
+            let results = join_all(resample_tasks).await;
+            
+            // 统计重采样的数量
+            resample_count += results.iter().filter(|&&result| result).count();
         }
         
         if self.enable_logging {
@@ -435,7 +473,7 @@ impl AudioSynthesizer {
         }
 
         // 使用抽取出的方法计算最大采样率和通道数，并进行重采样
-        self.update_max_audio_params_and_resample(true)?;
+        self.update_max_audio_params_and_resample(true).await?;
 
         if self.enable_logging {
             console_log!("音频合成器初始化完成，可以开始合成音频");
@@ -474,12 +512,12 @@ impl AudioSynthesizer {
         }
         
         // 更新最大采样率和通道数，并进行重采样
-        self.update_max_audio_params_and_resample(true)?;
+        self.update_max_audio_params_and_resample(true).await?;
         
         Ok(())
     }
 
-    pub fn delete(&mut self, id: &str) -> Result<(), JsValue> {
+    pub async fn delete(&mut self, id: &str) -> Result<(), JsValue> {
         // 检查内存是否已释放
         if self.memory_freed {
             return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
@@ -493,7 +531,7 @@ impl AudioSynthesizer {
         self.segments.remove(position);
         
         // 更新最大采样率和通道数，并进行重采样
-        self.update_max_audio_params_and_resample(true)?;
+        self.update_max_audio_params_and_resample(true).await?;
         
         Ok(())
     }
@@ -542,7 +580,7 @@ impl AudioSynthesizer {
         self.segments[position] = segment;
         
         // 更新最大采样率和通道数，并进行重采样
-        self.update_max_audio_params_and_resample(true)?;
+        self.update_max_audio_params_and_resample(true).await?;
         
         Ok(())
     }
