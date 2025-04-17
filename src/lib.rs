@@ -201,6 +201,53 @@ mod audio {
     }
 }
 
+/// 重采样音频数据的辅助函数
+/// 
+/// 将源音频数据按照目标采样率和通道数进行重采样
+pub fn resample_audio(
+    samples: &[f32],
+    src_sample_rate: u32,
+    src_channels: u32,
+    dst_sample_rate: u32,
+    dst_channels: u32,
+    enable_logging: bool,
+) -> Vec<f32> {
+    if enable_logging {
+        console_log!("重采样音频: ({}Hz, {}通道) -> ({}Hz, {}通道)", 
+            src_sample_rate, src_channels, dst_sample_rate, dst_channels);
+    }
+    
+    // 如果源和目标参数相同，直接返回克隆的数据
+    if src_sample_rate == dst_sample_rate && src_channels == dst_channels {
+        return samples.to_vec();
+    }
+    
+    // 创建新的采样数据
+    let mut resampled_data = Vec::new();
+    let ratio = dst_sample_rate as f32 / src_sample_rate as f32;
+    let channel_ratio = dst_channels as f32 / src_channels as f32;
+    
+    // 简单的线性插值重采样
+    let new_len = ((samples.len() as f32 / src_channels as f32) * ratio * dst_channels as f32) as usize;
+    resampled_data.resize(new_len, 0.0);
+    
+    for i in 0..((samples.len() / src_channels as usize) as usize) {
+        let src_pos = i * src_channels as usize;
+        let dst_pos = (i as f32 * ratio) as usize * dst_channels as usize;
+        
+        if dst_pos + dst_channels as usize <= resampled_data.len() {
+            for c in 0..src_channels as usize {
+                let dst_channel = (c as f32 * channel_ratio) as usize;
+                if dst_channel < dst_channels as usize && src_pos + c < samples.len() {
+                    resampled_data[dst_pos + dst_channel] = samples[src_pos + c];
+                }
+            }
+        }
+    }
+    
+    resampled_data
+}
+
 #[wasm_bindgen]
 pub struct AudioSynthesizer {
     segments: Vec<audio::Segment>,
@@ -209,6 +256,8 @@ pub struct AudioSynthesizer {
     enable_logging: bool,
     total_time_ms: u32,
     memory_freed: bool,
+    max_sample_rate: u32,
+    max_channels: u32,
 }
 
 #[wasm_bindgen]
@@ -241,7 +290,89 @@ impl AudioSynthesizer {
             enable_logging,
             total_time_ms,
             memory_freed: false,
+            max_sample_rate: 24000, // 默认采样率
+            max_channels: 1,        // 默认通道数
         })
+    }
+
+    /// 更新最大采样率和通道数，并对不符合标准的音频片段进行重采样
+    /// 
+    /// 计算所有片段中的最大采样率和通道数，并根据需要对不符合标准的片段进行重采样
+    /// 
+    /// * `do_resample` - 是否执行重采样操作
+    pub fn update_max_audio_params_and_resample(&mut self, do_resample: bool) -> Result<(), JsValue> {
+        if self.segments.is_empty() {
+            return Ok(());
+        }
+        
+        // 计算最大采样率和通道数
+        if self.enable_logging {
+            console_log!("开始计算最大采样率和通道数");
+        }
+        
+        // 重置最大采样率和通道数
+        self.max_sample_rate = 24000; // 默认值
+        self.max_channels = 1;        // 默认值
+        
+        // 遍历所有片段，找出最大采样率和通道数
+        for segment in &self.segments {
+            if let Some((_, sample_rate, channels)) = &segment.decoded_data {
+                self.max_sample_rate = self.max_sample_rate.max(*sample_rate);
+                self.max_channels = self.max_channels.max(*channels);
+            }
+        }
+        
+        if self.enable_logging {
+            console_log!("计算完成，最大采样率: {}Hz, 最大通道数: {}", self.max_sample_rate, self.max_channels);
+        }
+        
+        // 如果不需要重采样，直接返回
+        if !do_resample {
+            return Ok(());
+        }
+        
+        // 对不符合标准的音频片段进行重采样
+        if self.enable_logging {
+            console_log!("开始对不符合标准的音频片段进行重采样");
+        }
+        
+        let mut resample_count = 0;
+        
+        for segment in &mut self.segments {
+            if let Some((samples, sample_rate, channels)) = &segment.decoded_data {
+                // 如果采样率或通道数不符合标准，需要重采样
+                if *sample_rate != self.max_sample_rate || *channels != self.max_channels {
+                    if self.enable_logging {
+                        console_log!("重采样音频片段: {} ({}Hz, {}通道) -> ({}Hz, {}通道)", 
+                            segment.id, sample_rate, channels, self.max_sample_rate, self.max_channels);
+                    }
+                    
+                    // 使用通用重采样函数
+                    let resampled_data = resample_audio(
+                        samples, 
+                        *sample_rate, 
+                        *channels, 
+                        self.max_sample_rate, 
+                        self.max_channels,
+                        self.enable_logging
+                    );
+                    
+                    // 更新片段的解码数据
+                    segment.decoded_data = Some((resampled_data, self.max_sample_rate, self.max_channels));
+                    resample_count += 1;
+                }
+            }
+        }
+        
+        if self.enable_logging {
+            if resample_count > 0 {
+                console_log!("重采样完成，共处理了{}个音频片段", resample_count);
+            } else {
+                console_log!("所有音频片段均符合标准，无需重采样");
+            }
+        }
+        
+        Ok(())
     }
 
     // 新增初始化方法，负责下载音频片段
@@ -303,11 +434,15 @@ impl AudioSynthesizer {
             safe_progress_callback(progress, "downloading");
         }
 
-        safe_progress_callback(100.0, "complete");
+        // 使用抽取出的方法计算最大采样率和通道数，并进行重采样
+        self.update_max_audio_params_and_resample(true)?;
+
         if self.enable_logging {
             console_log!("音频合成器初始化完成，可以开始合成音频");
         }
 
+        safe_progress_callback(100.0, "complete");
+        
         Ok(())
     }
 
@@ -337,6 +472,10 @@ impl AudioSynthesizer {
             // 在找到的位置后插入新片段
             self.segments.insert(position + 1, segment);
         }
+        
+        // 更新最大采样率和通道数，并进行重采样
+        self.update_max_audio_params_and_resample(true)?;
+        
         Ok(())
     }
 
@@ -352,6 +491,10 @@ impl AudioSynthesizer {
             .position(|segment| segment.id == id)
             .ok_or_else(|| AudioError::SegmentNotFound(id.to_string()))?;
         self.segments.remove(position);
+        
+        // 更新最大采样率和通道数，并进行重采样
+        self.update_max_audio_params_and_resample(true)?;
+        
         Ok(())
     }
 
@@ -397,6 +540,10 @@ impl AudioSynthesizer {
 
         // 更新数组中的元素
         self.segments[position] = segment;
+        
+        // 更新最大采样率和通道数，并进行重采样
+        self.update_max_audio_params_and_resample(true)?;
+        
         Ok(())
     }
 
@@ -526,21 +673,22 @@ impl AudioSynthesizer {
 
                 // 如果需要重采样
                 if *sample_rate != max_sample_rate || *channels != max_channels {
-                    let ratio = max_sample_rate as f32 / *sample_rate as f32;
-                    let channel_ratio = max_channels as f32 / *channels as f32;
-
-                    for i in 0..samples.len() / *channels as usize {
-                        let src_pos = i * *channels as usize;
-                        let dst_pos = (start_sample as usize) + ((i as f32 * ratio) as usize * max_channels as usize);
-
-                        if dst_pos + max_channels as usize <= total_samples {
-                            for c in 0..*channels as usize {
-                                let dst_channel = (c as f32 * channel_ratio) as usize;
-                                if dst_channel < max_channels as usize && src_pos + c < samples.len() {
-                                    let mut sample = output_buffer[dst_pos + dst_channel].lock().unwrap();
-                                    *sample += samples[src_pos + c];
-                                }
-                            }
+                    // 使用通用重采样函数获取重采样后的数据
+                    let resampled = resample_audio(
+                        samples, 
+                        *sample_rate, 
+                        *channels, 
+                        max_sample_rate, 
+                        max_channels,
+                        self.enable_logging
+                    );
+                    
+                    // 将重采样后的数据添加到输出缓冲区
+                    for i in 0..resampled.len() {
+                        let dst_pos = start_sample as usize + i;
+                        if dst_pos < total_samples {
+                            let mut sample = output_buffer[dst_pos].lock().unwrap();
+                            *sample += resampled[i];
                         }
                     }
                 } else {
