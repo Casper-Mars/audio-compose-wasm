@@ -203,7 +203,7 @@ mod audio {
 
 /// 重采样音频数据的辅助函数
 /// 
-/// 将源音频数据按照目标采样率和通道数进行重采样
+/// 将源音频数据按照目标采样率和通道数进行重采样，使用高质量的Sinc插值算法
 pub fn resample_audio(
     samples: &[f32],
     src_sample_rate: u32,
@@ -222,30 +222,154 @@ pub fn resample_audio(
         return samples.to_vec();
     }
     
-    // 创建新的采样数据
-    let mut resampled_data = Vec::new();
-    let ratio = dst_sample_rate as f32 / src_sample_rate as f32;
-    let channel_ratio = dst_channels as f32 / src_channels as f32;
+    // 首先处理通道转换，将多通道音频分离为单通道数据
+    let mut channel_separated_data = Vec::with_capacity(src_channels as usize);
+    for c in 0..src_channels as usize {
+        let mut channel_data = Vec::with_capacity(samples.len() / src_channels as usize);
+        for i in 0..(samples.len() / src_channels as usize) {
+            let idx = i * src_channels as usize + c;
+            if idx < samples.len() {
+                channel_data.push(samples[idx]);
+            }
+        }
+        channel_separated_data.push(channel_data);
+    }
     
-    // 简单的线性插值重采样
-    let new_len = ((samples.len() as f32 / src_channels as f32) * ratio * dst_channels as f32) as usize;
-    resampled_data.resize(new_len, 0.0);
+    // 对每个通道进行高质量重采样
+    let mut resampled_channels = Vec::with_capacity(dst_channels as usize);
+    let ratio = dst_sample_rate as f64 / src_sample_rate as f64;
     
-    for i in 0..((samples.len() / src_channels as usize) as usize) {
-        let src_pos = i * src_channels as usize;
-        let dst_pos = (i as f32 * ratio) as usize * dst_channels as usize;
+    // 确定要使用的源通道
+    let channels_to_use = std::cmp::min(src_channels, dst_channels) as usize;
+    
+    // 对每个需要的通道进行重采样
+    for c in 0..channels_to_use {
+        let src_channel = &channel_separated_data[c];
+        let src_len = src_channel.len();
+        let dst_len = (src_len as f64 * ratio) as usize;
+        let mut dst_channel = Vec::with_capacity(dst_len);
         
-        if dst_pos + dst_channels as usize <= resampled_data.len() {
-            for c in 0..src_channels as usize {
-                let dst_channel = (c as f32 * channel_ratio) as usize;
-                if dst_channel < dst_channels as usize && src_pos + c < samples.len() {
-                    resampled_data[dst_pos + dst_channel] = samples[src_pos + c];
+        // 使用Sinc插值进行高质量重采样
+        // Sinc窗口大小，较大的窗口提供更好的质量但计算成本更高
+        let window_size = 16;
+        
+        for i in 0..dst_len {
+            let src_idx_f = i as f64 / ratio;
+            let src_idx = src_idx_f.floor() as isize;
+            let frac = src_idx_f - src_idx as f64;
+            
+            let mut sum = 0.0;
+            let mut weight_sum = 0.0;
+            
+            // 应用Sinc插值
+            for j in -window_size..=window_size {
+                let idx = src_idx + j;
+                if idx >= 0 && idx < src_len as isize {
+                    // Lanczos窗口函数
+                    let x = std::f64::consts::PI * (frac - j as f64);
+                    let mut weight = 1.0;
+                    if x.abs() > 1e-6 { // 避免除以零
+                        weight = (x.sin() / x) * ((x / window_size as f64).sin() / (x / window_size as f64));
+                    }
+                    
+                    sum += src_channel[idx as usize] as f64 * weight;
+                    weight_sum += weight;
                 }
+            }
+            
+            // 归一化结果
+            if weight_sum > 1e-6 {
+                dst_channel.push((sum / weight_sum) as f32);
+            } else {
+                dst_channel.push(0.0);
+            }
+        }
+        
+        resampled_channels.push(dst_channel);
+    }
+    
+    // 如果目标通道数大于源通道数，复制现有通道
+    while resampled_channels.len() < dst_channels as usize {
+        let channel_to_copy = resampled_channels[resampled_channels.len() % channels_to_use].clone();
+        resampled_channels.push(channel_to_copy);
+    }
+    
+    // 将重采样后的通道数据交织在一起
+    let mut resampled_data = Vec::with_capacity(resampled_channels[0].len() * dst_channels as usize);
+    for i in 0..resampled_channels[0].len() {
+        for c in 0..dst_channels as usize {
+            if i < resampled_channels[c].len() {
+                resampled_data.push(resampled_channels[c][i]);
+            } else {
+                resampled_data.push(0.0);
             }
         }
     }
     
+    // 应用低通滤波器以消除混叠伪影
+    if dst_sample_rate < src_sample_rate {
+        resampled_data = apply_lowpass_filter(resampled_data, dst_channels, dst_sample_rate, src_sample_rate);
+    }
+    
+    if enable_logging {
+        console_log!("重采样完成，输出样本数: {}", resampled_data.len());
+    }
+    
     resampled_data
+}
+
+/// 应用低通滤波器以消除混叠伪影
+fn apply_lowpass_filter(samples: Vec<f32>, channels: u32, sample_rate: u32, original_rate: u32) -> Vec<f32> {
+    // 计算截止频率，通常为新采样率的一半（奈奎斯特频率）
+    let cutoff_freq = 0.9 * (sample_rate as f32 / 2.0) / original_rate as f32;
+    
+    // 简单的FIR低通滤波器，使用汉宁窗
+    let filter_size = 31; // 必须是奇数
+    let half_size = filter_size / 2;
+    
+    // 创建滤波器系数
+    let mut filter = vec![0.0; filter_size];
+    let mut sum = 0.0;
+    
+    for i in 0..filter_size {
+        let n = i as isize - half_size as isize;
+        if n == 0 {
+            filter[i] = 2.0 * cutoff_freq;
+        } else {
+            // Sinc函数
+            filter[i] = (2.0 * cutoff_freq * std::f32::consts::PI * n as f32).sin() / (std::f32::consts::PI * n as f32);
+        }
+        
+        // 应用汉宁窗
+        let hanning = 0.5 + 0.5 * std::f32::consts::PI.cos() * (i as f32 / (filter_size - 1) as f32 * 2.0 - 1.0);
+        filter[i] *= hanning;
+        
+        sum += filter[i];
+    }
+    
+    // 归一化滤波器系数
+    for i in 0..filter_size {
+        filter[i] /= sum;
+    }
+    
+    // 应用滤波器
+    let mut filtered = vec![0.0; samples.len()];
+    let channels = channels as usize;
+    
+    for c in 0..channels {
+        for i in 0..(samples.len() / channels) {
+            let mut sum = 0.0;
+            for j in 0..filter_size {
+                let n = i as isize - half_size as isize + j as isize;
+                if n >= 0 && n < (samples.len() / channels) as isize {
+                    sum += samples[n as usize * channels + c] * filter[j];
+                }
+            }
+            filtered[i * channels + c] = sum;
+        }
+    }
+    
+    filtered
 }
 
 #[wasm_bindgen]
