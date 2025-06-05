@@ -641,6 +641,107 @@ impl AudioSynthesizer {
         Ok(())
     }
 
+    /// 批量添加音频片段
+    /// 
+    /// 接收一个JSON数组字符串，结构与new方法的json_input参数一致，并将所有片段添加到指定位置
+    /// 
+    /// * `json_segments` - 包含多个音频片段的JSON数组字符串
+    /// * `pre_id` - 在此ID对应的片段后插入新片段，如果为"-1"则添加到数组首位
+    pub async fn add_batch(&mut self, json_segments: &str, pre_id: &str) -> Result<(), JsValue> {
+        // 检查内存是否已释放
+        if self.memory_freed {
+            return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
+        }
+        
+        // 解析JSON数组
+        let mut segments: Vec<audio::Segment> =
+            serde_json::from_str(json_segments).map_err(|e| AudioError::JsonParseError(e))?;
+
+        if self.enable_logging {
+            console_log!("开始批量添加{}个音频片段...", segments.len());
+        }
+
+        if segments.is_empty() {
+            if self.enable_logging {
+                console_log!("没有音频片段需要添加");
+            }
+            return Ok(());
+        }
+
+        // 开始下载进度
+        safe_progress_callback(0.0, "downloading");
+
+        // 并发下载所有片段
+        let total_segments = segments.len();
+        let total_batches = (total_segments + self.download_batch_size - 1) / self.download_batch_size;
+
+        for (batch_index, batch) in segments.chunks_mut(self.download_batch_size).enumerate() {
+            if self.enable_logging {
+                console_log!(
+                    "开始下载第{}/{}批音频片段...",
+                    batch_index + 1,
+                    total_batches
+                );
+            }
+
+            // 创建当前批次的下载任务
+            let download_tasks = batch
+                .iter_mut()
+                .map(|segment| segment.download(self.enable_logging));
+
+            // 并行执行当前批次的下载任务
+            let results = join_all(download_tasks).await;
+
+            // 检查当前批次的下载结果
+            for result in results {
+                if let Err(e) = result {
+                    if self.enable_logging {
+                        console_log!("下载过程中发生错误: {}", e);
+                    }
+                    return Err(e.into());
+                }
+            }
+
+            // 更新进度
+            let progress = ((batch_index + 1) as f64 / total_batches as f64) * 100.0;
+            safe_progress_callback(progress, "downloading");
+        }
+
+        // 查找插入位置
+        let insert_position = if pre_id == "-1" {
+            0
+        } else {
+            // 查找pre_id对应的位置
+            let position = self
+                .segments
+                .iter()
+                .position(|s| s.id == pre_id)
+                .ok_or_else(|| AudioError::SegmentNotFound(pre_id.to_string()))?;
+            // 在找到的位置后插入新片段
+            position + 1
+        };
+
+        // 批量插入所有片段
+        for (i, segment) in segments.into_iter().enumerate() {
+            self.segments.insert(insert_position + i, segment);
+        }
+        
+        if self.enable_logging {
+            console_log!("所有音频片段下载完成，开始更新音频参数并重采样");
+        }
+
+        // 更新最大采样率和通道数，并进行重采样
+        self.update_max_audio_params_and_resample(true).await?;
+        
+        safe_progress_callback(100.0, "complete");
+        
+        if self.enable_logging {
+            console_log!("批量添加音频片段完成");
+        }
+        
+        Ok(())
+    }
+
     pub async fn delete(&mut self, id: &str) -> Result<(), JsValue> {
         // 检查内存是否已释放
         if self.memory_freed {
