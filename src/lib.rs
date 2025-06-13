@@ -810,6 +810,89 @@ impl AudioSynthesizer {
         Ok(())
     }
 
+    /// 批量更新多个音频片段
+    /// 
+    /// # 参数
+    /// * `json_segments` - JSON字符串，包含要更新的音频片段数组
+    /// 
+    /// # 返回值
+    /// * `Ok(())` - 更新成功
+    /// * `Err(JsValue)` - 更新失败，包含错误信息
+    #[wasm_bindgen]
+    pub async fn update_batch(&mut self, json_segments: &str) -> Result<(), JsValue> {
+        // 检查内存是否已释放
+        if self.memory_freed {
+            return Err(AudioError::InternalError("内存已释放，请先调用init方法重新初始化".to_string()).into());
+        }
+        
+        let segments: Vec<audio::Segment> =
+            serde_json::from_str(json_segments).map_err(|e| AudioError::JsonParseError(e))?;
+
+        if self.enable_logging {
+            console_log!("开始批量更新{}个音频片段", segments.len());
+        }
+
+        let mut updated_count = 0;
+        let total_count = segments.len();
+
+        for mut segment in segments {
+            let position = self
+                .segments
+                .iter()
+                .position(|s| s.id == segment.id)
+                .ok_or_else(|| AudioError::SegmentNotFound(segment.id.clone()))?;
+
+            // 获取原有的音频片段
+            let existing_segment = &self.segments[position];
+
+            // 检查URL是否发生变化
+            if existing_segment.url == segment.url {
+                if self.enable_logging {
+                    console_log!("URL未变化，复用原有音频数据: {}", segment.url);
+                }
+                // 复用原有的音频数据和解码后的数据
+                segment.buffer = existing_segment.buffer.clone();
+                segment.decoded_data = existing_segment.decoded_data.clone();
+            } else {
+                // URL已变化，需要重新下载
+                if self.enable_logging {
+                    console_log!(
+                        "URL已变化，重新下载音频: {} -> {}",
+                        existing_segment.url,
+                        segment.url
+                    );
+                }
+                
+                // 计算下载进度
+                let progress_start = (updated_count as f64 / total_count as f64) * 100.0;
+                let progress_end = ((updated_count + 1) as f64 / total_count as f64) * 100.0;
+                
+                safe_progress_callback(progress_start, "downloading");
+                segment.download(self.enable_logging).await?;
+                safe_progress_callback(progress_end, "downloading");
+            }
+
+            // 更新数组中的元素
+            self.segments[position] = segment;
+            updated_count += 1;
+            
+            if self.enable_logging {
+                console_log!("已更新 {}/{} 个音频片段", updated_count, total_count);
+            }
+        }
+        
+        // 更新最大采样率和通道数，并进行重采样
+        self.update_max_audio_params_and_resample(true).await?;
+        
+        safe_progress_callback(100.0, "complete");
+        
+        if self.enable_logging {
+            console_log!("批量更新完成，共更新{}个音频片段", updated_count);
+        }
+        
+        Ok(())
+    }
+
     /// 释放内存，清空所有音频片段的缓存数据
     /// 
     /// 在不再需要音频数据时调用此方法可以释放内存
